@@ -1,3 +1,5 @@
+import re
+
 import matplotlib
 matplotlib.use("Agg")
 
@@ -23,9 +25,15 @@ def sample_df():
 
 
 def test_regression_runs(sample_df, capsys):
+    """regression がエラーなく実行され、結果を出力することの確認
+
+    ラベルの文言は変わりうるので、特定の語句ではなく
+    「数値を含む出力があること」を確かめる。
+    """
     regression("全国成長効果", "産業構成効果", sample_df)
-    captured = capsys.readouterr()
-    assert "決定係数" in captured.out
+    out = capsys.readouterr().out
+    assert out.strip() != "", "regression が何も出力していません。"
+    assert re.search(r"\d", out), "regression の出力に数値が含まれていません。"
 
 
 def test_regression_plot_runs(sample_df):
@@ -128,8 +136,37 @@ def test_error_messages_are_multiline(sample_df):
 # 信頼区間の臨界値に関するテスト
 # ============================================================
 
+def _extract_ci(text):
+    """regression の出力から信頼区間の2つの数値を取り出す。
+
+    print の書式（空白の有無、ラベルの文言）に左右されないよう、
+    「[数値, 数値]」の形を正規表現で探して数値として返す。
+    """
+    number = r"[-+]?\d+(?:\.\d+)?"
+    pattern = re.compile(rf"\[\s*({number})\s*,\s*({number})\s*\]")
+
+    # 「信頼区間」を含む行を優先して探す
+    for line in text.splitlines():
+        if "信頼区間" in line:
+            m = pattern.search(line)
+            if m:
+                return float(m.group(1)), float(m.group(2))
+
+    # 見つからなければ出力全体から探す
+    m = pattern.search(text)
+    assert m is not None, (
+        "出力の中に「[下限, 上限]」の形の信頼区間が見つかりませんでした。\n"
+        f"実際の出力:\n{text}"
+    )
+    return float(m.group(1)), float(m.group(2))
+
+
 def test_ci_uses_correct_critical_value(capsys):
-    """信頼区間が自由度に応じたt分布の臨界値を使っていることの確認"""
+    """信頼区間が自由度に応じたt分布の臨界値を使っていることの確認
+
+    表示された数値そのものを取り出して比べるので、
+    print の文言や空白の入れ方を変えてもこのテストは壊れない。
+    """
     from scipy import stats as _stats
 
     rng = np.random.default_rng(1)
@@ -139,17 +176,39 @@ def test_ci_uses_correct_critical_value(capsys):
     df = pd.DataFrame({"x": xv, "y": yv, "産業": [f"i{i}" for i in range(n)]})
 
     regression("x", "y", df)
-    out = capsys.readouterr().out
+    left, right = _extract_ci(capsys.readouterr().out)
 
     res = _stats.linregress(xv, yv)
     t_crit = _stats.t.ppf(0.975, n - 2)
-    expected_left = res.slope - t_crit * res.stderr
-    expected_right = res.slope + t_crit * res.stderr
 
-    assert f"[{expected_left:.3f},{expected_right:.3f}]" in out
-    # 旧実装の固定値 2.131 を使っていないことの確認
+    # 小数第3位まで表示されるため、丸め誤差ぶんの許容幅をとる
+    tol = 0.001
+    assert abs(left - (res.slope - t_crit * res.stderr)) <= tol
+    assert abs(right - (res.slope + t_crit * res.stderr)) <= tol
+
+    # 旧実装の固定値 2.131 を使っていないことの確認。
+    # 「その文字列が出力に無いこと」ではなく
+    # 「数値が2.131版とは違うこと」を確かめる。
     wrong_left = res.slope - 2.131 * res.stderr
-    assert f"[{wrong_left:.3f}," not in out
+    assert abs(left - wrong_left) > tol, (
+        "信頼区間が固定値 2.131 を使ったときの値と一致しています。"
+        "t_crit による計算に戻っていないか確認してください。"
+    )
+
+
+def test_extract_ci_is_format_independent():
+    """_extract_ci が print の書式変更に耐えることの確認"""
+    patterns = [
+        "信頼区間 (95%) = [1.511,1.597]",
+        "b₁ の95%信頼区間 : [1.511, 1.597]",
+        "信頼区間　:　[ 1.511 ,  1.597 ]",
+        "推定式: y = b0 + b1x\n標本の大きさ(n): 47\nb₁ の95%信頼区間 : [1.511, 1.597]\n",
+    ]
+    for text in patterns:
+        assert _extract_ci(text) == (1.511, 1.597), f"抽出に失敗: {text!r}"
+
+    # 負の値を含む場合
+    assert _extract_ci("信頼区間 : [-0.250, 1.030]") == (-0.250, 1.030)
 
 
 def test_ci_consistent_with_beta_one_test():
