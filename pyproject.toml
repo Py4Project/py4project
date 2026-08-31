@@ -1,0 +1,39 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "py4project"
+version = "0.1.0"
+description = "授業用回帰分析・散布図・バープロット・ボックスプロットのユーティリティ"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Tetsugen HARUYAMA", email = "tetsu.yes@gmail.com" }
+]
+keywords = ["shift-share", "regional-economics", "matplotlib", "statistics"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Intended Audience :: Education",
+    "Natural Language :: Japanese",
+]
+dependencies = [
+    "numpy",
+    "pandas",
+    "scipy",
+    # box_plot が使う boxplot(tick_labels=...) は matplotlib 3.9 で追加された引数。
+    # 3.8 以下では TypeError になることを確認済みのため下限を固定する。
+    "matplotlib>=3.9",
+    "japanize_matplotlib_jlite",
+]
+
+[project.urls]
+Homepage = "https://github.com/Py4Project/py4project"
+Repository = "https://github.com/Py4Project/py4project"
+Issues = "https://github.com/Py4Project/py4project/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/py4project"]
