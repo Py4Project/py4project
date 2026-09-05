@@ -1,43 +1,53 @@
-import re
-
 import matplotlib
 matplotlib.use("Agg")
 
-import pandas as pd
 import numpy as np
+import pandas as pd
 import pytest
+import statsmodels.api as sm
 
-from py4project import regression, regression_plot, scatter_plot, bar_plot, box_plot
+from py4project import (
+    regression, regression_plot, scatter_plot, bar_plot, box_plot,
+)
+from py4project.core import RegressionResult
 
 
 @pytest.fixture
 def sample_df():
     rng = np.random.default_rng(0)
-    x = rng.uniform(10, 100, size=10)
-    y = 1.5 * x + rng.normal(0, 5, size=10)
+    x = rng.uniform(10, 100, size=20)
+    y = 1.5 * x + rng.normal(0, 5, size=20)
     return pd.DataFrame({
-        "産業コード": range(1, 11),
-        "産業": [f"産業{i}" for i in range(1, 11)],
+        "産業コード": range(1, 21),
+        "産業": [f"産業{i}" for i in range(1, 21)],
         "全国成長効果": x,
         "産業構成効果": y,
         "地域固有効果": x - y,
+        "区分": ["A", "B"] * 10,
     })
 
 
-def test_regression_runs(sample_df, capsys):
-    """regression がエラーなく実行され、結果を出力することの確認
+# ============================================================
+# 基本動作
+# ============================================================
 
-    ラベルの文言は変わりうるので、特定の語句ではなく
-    「数値を含む出力があること」を確かめる。
-    """
-    regression("全国成長効果", "産業構成効果", sample_df)
-    out = capsys.readouterr().out
-    assert out.strip() != "", "regression が何も出力していません。"
-    assert re.search(r"\d", out), "regression の出力に数値が含まれていません。"
+def test_regression_returns_wrapper(sample_df):
+    res = regression("全国成長効果", "産業構成効果", sample_df)
+    assert isinstance(res, RegressionResult)
 
 
 def test_regression_plot_runs(sample_df):
-    regression_plot("全国成長効果", "産業構成効果", sample_df, text=True)
+    regression_plot("全国成長効果", "産業構成効果", sample_df)
+
+
+def test_regression_plot_with_text(sample_df):
+    regression_plot("全国成長効果", "産業構成効果", sample_df,
+                    text=True, text_col="産業")
+
+
+def test_regression_plot_from_result(sample_df):
+    res = regression("全国成長効果", "産業構成効果", sample_df)
+    regression_plot(ols_res=res)
 
 
 def test_scatter_plot_runs(sample_df):
@@ -64,14 +74,185 @@ def test_box_plot_runs(sample_df):
 
 
 def test_box_plot_xlog_runs(sample_df):
-    # 修正前は NameError: name 'pd' is not defined で失敗していた箇所
     df = sample_df.copy()
     df["全国成長効果"] = df["全国成長効果"].abs() + 1
     box_plot(["全国成長効果"], df, xlog=True)
 
 
 # ============================================================
-# エラーメッセージのテスト
+# 回帰分析の数値（D-1：printではなく戻り値を検証する）
+# ============================================================
+
+def test_regression_matches_statsmodels(sample_df):
+    """係数と信頼区間が statsmodels の計算と一致することの確認"""
+    res = regression("全国成長効果", "産業構成効果", sample_df)
+
+    Y = sample_df["産業構成効果"]
+    X = sm.add_constant(sample_df[["全国成長効果"]])
+    expected = sm.OLS(Y, X).fit()
+
+    assert res.params.equals(expected.params)
+    assert res.rsquared == pytest.approx(expected.rsquared)
+
+    ci = res.conf_int(alpha=0.05)
+    exp_ci = expected.conf_int(alpha=0.05)
+    assert np.allclose(ci.to_numpy(), exp_ci.to_numpy())
+
+
+def test_regression_alpha_changes_interval(sample_df):
+    """alpha を小さくすると信頼区間が広がることの確認"""
+    r95 = regression("全国成長効果", "産業構成効果", sample_df, alpha=0.05)
+    r99 = regression("全国成長効果", "産業構成効果", sample_df, alpha=0.01)
+
+    w95 = r95.table["信頼区間上限"] - r95.table["信頼区間下限"]
+    w99 = r99.table["信頼区間上限"] - r99.table["信頼区間下限"]
+    assert (w99 > w95).all()
+    assert ("99 ％") in repr(r99)
+
+
+def test_regression_robust_changes_se_not_coefficients(sample_df):
+    """robust=True で係数は変わらず、標準誤差だけが変わることの確認"""
+    plain = regression("全国成長効果", "産業構成効果", sample_df, robust=False)
+    rob = regression("全国成長効果", "産業構成効果", sample_df, robust=True)
+
+    assert np.allclose(plain.params.to_numpy(), rob.params.to_numpy())
+    assert not np.allclose(plain.bse.to_numpy(), rob.bse.to_numpy())
+    assert "HC3" in repr(rob)
+
+
+def test_regression_multiple_x(sample_df):
+    """x にリストを渡すと重回帰になることの確認"""
+    res = regression(["全国成長効果", "地域固有効果"], "産業構成効果", sample_df)
+    assert list(res.table.index) == ["定数項", "全国成長効果", "地域固有効果"]
+
+
+def test_regression_stars_toggle(sample_df):
+    with_stars = regression("全国成長効果", "産業構成効果", sample_df, stars=True)
+    without = regression("全国成長効果", "産業構成効果", sample_df, stars=False)
+    assert "有意性" in with_stars.table.columns
+    assert "有意性" not in without.table.columns
+
+
+def test_regression_drops_missing_rows(sample_df):
+    df = sample_df.copy()
+    df.loc[0, "全国成長効果"] = np.nan
+    res = regression("全国成長効果", "産業構成効果", df)
+    assert int(res.nobs) == len(sample_df) - 1
+    assert "欠損値のため除外" in repr(res)
+
+
+# ============================================================
+# 案3：表示の仕組み
+# ============================================================
+
+def test_result_has_html_repr(sample_df):
+    res = regression("全国成長効果", "産業構成効果", sample_df)
+    html = res._repr_html_()
+    assert "<table" in html
+    assert "被説明変数" in html
+
+
+def test_footnote_escaped_only_in_html(sample_df):
+    """脚注の「<」がテキストではそのまま、HTMLではエスケープされることの確認"""
+    res = regression("全国成長効果", "産業構成効果", sample_df, stars=True)
+    assert "p<0.01" in repr(res)
+    assert "&lt;" not in repr(res)
+    assert "p&lt;0.01" in res._repr_html_()
+
+
+def test_result_forwards_attributes(sample_df):
+    """statsmodels の属性が転送されることの確認"""
+    res = regression("全国成長効果", "産業構成効果", sample_df)
+    assert res.nobs == 20
+    assert hasattr(res, "pvalues")
+    assert type(res.result).__name__ == "RegressionResultsWrapper"
+
+
+# ============================================================
+# regression_plot の仕様（A-1, A-2, A-4）
+# ============================================================
+
+def test_plot_uses_passed_result_without_refitting(sample_df):
+    """A-2：渡した結果の係数がそのまま使われることの確認"""
+    res = regression("全国成長効果", "産業構成効果", sample_df)
+    regression_plot(ols_res=res)
+
+    ax = matplotlib.pyplot.gcf().axes[0]
+    line = [ln for ln in ax.lines if ln.get_label() == "回帰直線"][0]
+    xs, ys = line.get_xdata(), line.get_ydata()
+    slope = (ys[-1] - ys[0]) / (xs[-1] - xs[0])
+    assert slope == pytest.approx(float(res.params.iloc[1]))
+    matplotlib.pyplot.close("all")
+
+
+def test_plot_uses_variable_names_from_result(sample_df):
+    """A-1：endog / exog の名前がタイトルと軸ラベルに使われることの確認"""
+    res = regression("全国成長効果", "産業構成効果", sample_df)
+    regression_plot(ols_res=res)
+
+    ax = matplotlib.pyplot.gcf().axes[0]
+    assert "None" not in ax.get_title()
+    assert "産業構成効果" in ax.get_title()
+    assert ax.get_xlabel() == "全国成長効果"
+    assert ax.get_ylabel() == "産業構成効果"
+    matplotlib.pyplot.close("all")
+
+
+def test_empty_title_still_draws_line(sample_df):
+    """A-4：title='' でも回帰直線が消えないことの確認"""
+    regression_plot("全国成長効果", "産業構成効果", sample_df, title="")
+    ax = matplotlib.pyplot.gcf().axes[0]
+    assert any(ln.get_label() == "回帰直線" for ln in ax.lines)
+    matplotlib.pyplot.close("all")
+
+
+def test_line_false_draws_no_line(sample_df):
+    regression_plot("全国成長効果", "産業構成効果", sample_df, line=False)
+    ax = matplotlib.pyplot.gcf().axes[0]
+    assert not any(ln.get_label() == "回帰直線" for ln in ax.lines)
+    matplotlib.pyplot.close("all")
+
+
+def test_plot_rejects_multiple_regression_result(sample_df):
+    res = regression(["全国成長効果", "地域固有効果"], "産業構成効果", sample_df)
+    with pytest.raises(ValueError, match="重回帰"):
+        regression_plot(ols_res=res)
+
+
+# ============================================================
+# 引数の既定値（A-5, A-6）
+# ============================================================
+
+def test_text_defaults_to_false(sample_df):
+    """A-5：text の既定値が両関数で False であることの確認"""
+    import inspect
+    for fn in (regression_plot, scatter_plot):
+        assert inspect.signature(fn).parameters["text"].default is False
+
+
+def test_text_col_defaults_to_none(sample_df):
+    """A-6：text_col の既定値が両関数で None であることの確認"""
+    import inspect
+    for fn in (regression_plot, scatter_plot):
+        assert inspect.signature(fn).parameters["text_col"].default is None
+
+
+def test_ols_res_is_keyword_only():
+    import inspect
+    p = inspect.signature(regression_plot).parameters["ols_res"]
+    assert p.kind is inspect.Parameter.KEYWORD_ONLY
+
+
+def test_argument_order_is_x_y_data():
+    """全関数で (x, y, data) の順であることの確認"""
+    import inspect
+    for fn in (regression, regression_plot, scatter_plot):
+        names = list(inspect.signature(fn).parameters)[:3]
+        assert names == ["x", "y", "data"], f"{fn.__name__}: {names}"
+
+
+# ============================================================
+# エラーメッセージ（B-4, B-5）
 # ============================================================
 
 def test_error_column_not_found(sample_df):
@@ -86,14 +267,13 @@ def test_error_argument_order(sample_df):
 
 def test_error_non_numeric_column(sample_df):
     with pytest.raises(TypeError, match="数値ではない"):
-        regression("全国成長効果", "産業", sample_df)
+        regression("全国成長効果", "区分", sample_df)
 
 
-def test_error_missing_values(sample_df):
-    df = sample_df.copy()
-    df.loc[0, "全国成長効果"] = np.nan
-    with pytest.raises(ValueError, match="欠損値"):
-        regression("全国成長効果", "産業構成効果", df)
+def test_error_text_without_text_col(sample_df):
+    for fn in (regression_plot, scatter_plot):
+        with pytest.raises(ValueError, match="text_col"):
+            fn("全国成長効果", "産業構成効果", sample_df, text=True)
 
 
 def test_error_log_non_positive(sample_df):
@@ -119,118 +299,36 @@ def test_error_xlabel_length_mismatch(sample_df):
         box_plot(["全国成長効果", "産業構成効果"], sample_df, xlabel=["A"])
 
 
-def test_numeric_text_col_does_not_crash(sample_df):
-    # 修正前は IndexError で落ちていた
-    regression_plot("全国成長効果", "産業構成効果", sample_df, text_col="産業コード")
-
-
 def test_error_messages_are_multiline(sample_df):
-    # KeyError だと改行が潰れるため ValueError を使っていることの確認
+    """エラーメッセージが【エラー】形式の複数行であることの確認"""
     with pytest.raises(ValueError) as exc:
         regression("全国成長効果", "存在しない列", sample_df)
-    assert "\n" in str(exc.value)
-    assert "対処：" in str(exc.value)
+    msg = str(exc.value)
+    assert "【エラー】" in msg
+    assert "原因：" in msg
+    assert "対処：" in msg
+
+
+def test_error_example_uses_x_y_order(sample_df):
+    """F-1：エラー文中の例が (x, y) の順で説明されていることの確認"""
+    with pytest.raises(TypeError) as exc:
+        regression(sample_df, "全国成長効果", "産業構成効果")
+    assert "説明変数" in str(exc.value)
+
+
+def test_numeric_text_col_does_not_crash(sample_df):
+    regression_plot("全国成長効果", "産業構成効果", sample_df,
+                    text=True, text_col="産業コード")
 
 
 # ============================================================
-# 信頼区間の臨界値に関するテスト
+# 依存関係（C-2）
 # ============================================================
 
-def _extract_ci(text):
-    """regression の出力から信頼区間の2つの数値を取り出す。
-
-    print の書式（空白の有無、ラベルの文言）に左右されないよう、
-    「[数値, 数値]」の形を正規表現で探して数値として返す。
-    """
-    number = r"[-+]?\d+(?:\.\d+)?"
-    pattern = re.compile(rf"\[\s*({number})\s*,\s*({number})\s*\]")
-
-    # 「信頼区間」を含む行を優先して探す
-    for line in text.splitlines():
-        if "信頼区間" in line:
-            m = pattern.search(line)
-            if m:
-                return float(m.group(1)), float(m.group(2))
-
-    # 見つからなければ出力全体から探す
-    m = pattern.search(text)
-    assert m is not None, (
-        "出力の中に「[下限, 上限]」の形の信頼区間が見つかりませんでした。\n"
-        f"実際の出力:\n{text}"
-    )
-    return float(m.group(1)), float(m.group(2))
-
-
-def test_ci_uses_correct_critical_value(capsys):
-    """信頼区間が自由度に応じたt分布の臨界値を使っていることの確認
-
-    表示された数値そのものを取り出して比べるので、
-    print の文言や空白の入れ方を変えてもこのテストは壊れない。
-    """
-    from scipy import stats as _stats
-
-    rng = np.random.default_rng(1)
-    n = 47
-    xv = rng.uniform(10, 100, n)
-    yv = 1.5 * xv + rng.normal(0, 5, n)
-    df = pd.DataFrame({"x": xv, "y": yv, "産業": [f"i{i}" for i in range(n)]})
-
-    regression("x", "y", df)
-    left, right = _extract_ci(capsys.readouterr().out)
-
-    res = _stats.linregress(xv, yv)
-    t_crit = _stats.t.ppf(0.975, n - 2)
-
-    # 小数第3位まで表示されるため、丸め誤差ぶんの許容幅をとる
-    tol = 0.001
-    assert abs(left - (res.slope - t_crit * res.stderr)) <= tol
-    assert abs(right - (res.slope + t_crit * res.stderr)) <= tol
-
-    # 旧実装の固定値 2.131 を使っていないことの確認。
-    # 「その文字列が出力に無いこと」ではなく
-    # 「数値が2.131版とは違うこと」を確かめる。
-    wrong_left = res.slope - 2.131 * res.stderr
-    assert abs(left - wrong_left) > tol, (
-        "信頼区間が固定値 2.131 を使ったときの値と一致しています。"
-        "t_crit による計算に戻っていないか確認してください。"
-    )
-
-
-def test_extract_ci_is_format_independent():
-    """_extract_ci が print の書式変更に耐えることの確認"""
-    patterns = [
-        "信頼区間 (95%) = [1.511,1.597]",
-        "b₁ の95%信頼区間 : [1.511, 1.597]",
-        "信頼区間　:　[ 1.511 ,  1.597 ]",
-        "推定式: y = b0 + b1x\n標本の大きさ(n): 47\nb₁ の95%信頼区間 : [1.511, 1.597]\n",
-    ]
-    for text in patterns:
-        assert _extract_ci(text) == (1.511, 1.597), f"抽出に失敗: {text!r}"
-
-    # 負の値を含む場合
-    assert _extract_ci("信頼区間 : [-0.250, 1.030]") == (-0.250, 1.030)
-
-
-def test_ci_consistent_with_beta_one_test():
-    """信頼区間が1を含まないことと、β=1検定の棄却が一致することの確認"""
-    from scipy import stats as _stats
-
-    rng = np.random.default_rng(7)
-    for _ in range(50):
-        n = int(rng.integers(5, 60))
-        xv = rng.uniform(10, 100, n)
-        yv = rng.uniform(0.5, 2.0) * xv + rng.normal(0, float(rng.uniform(1, 30)), n)
-        res = _stats.linregress(xv, yv)
-        t_crit = _stats.t.ppf(0.975, n - 2)
-        lo = res.slope - t_crit * res.stderr
-        hi = res.slope + t_crit * res.stderr
-        t_stat = (res.slope - 1) / res.stderr
-        p = 2 * (1 - _stats.t.cdf(abs(t_stat), n - 2))
-        assert (not (lo <= 1 <= hi)) == (p < 0.05)
-
-
-def test_docstring_no_longer_mentions_n17():
-    """docstringからn=17に関する注意書きが削除されていることの確認"""
-    for fn in (regression, regression_plot):
-        assert "2.131" not in fn.__doc__
-        assert "n = 17" not in fn.__doc__
+def test_core_does_not_import_scipy_directly():
+    """C-2：core.py が scipy を直接 import していないことの確認"""
+    import inspect
+    import py4project.core as core
+    src = inspect.getsource(core)
+    assert "from scipy" not in src
+    assert "import scipy" not in src

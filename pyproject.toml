@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "py4project"
-version = "0.1.0"
+version = "0.2.0"
 description = "授業用回帰分析・散布図・バープロット・ボックスプロットのユーティリティ"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,7 +23,8 @@ classifiers = [
 dependencies = [
     "numpy",
     "pandas",
-    "scipy",
+    # 回帰分析は statsmodels を使う（scipy は statsmodels 経由で入るため直接依存にしない）
+    "statsmodels",
     # box_plot が使う boxplot(tick_labels=...) は matplotlib 3.9 で追加された引数。
     # 3.8 以下では TypeError になることを確認済みのため下限を固定する。
     "matplotlib>=3.9",

@@ -1,7 +1,7 @@
 import japanize_matplotlib_jlite
 import numpy as np
 import pandas as pd
-from scipy import stats
+import statsmodels.api as sm
 import matplotlib.pyplot as plt
 
 
@@ -25,9 +25,9 @@ def _check_dataframe(data, arg_name='data'):
             f'引数 {arg_name} がデータフレームではありません。',
             f'{arg_name} に {type(data).__name__} 型のものが渡されました。',
             '引数の順番を確認してください。'
-            'この関数は「列名を先、データフレームを後」に書きます。'
+            'この関数は「説明変数x、被説明変数y、データフレーム」の順に書きます。'
             '例： regression("人口", "所得", df) '
-            '（regression(df, "人口", "所得") ではありません）'))
+            '（人口が説明変数、所得が被説明変数）'))
 
 
 def _check_column(data, col, arg_name):
@@ -89,6 +89,19 @@ def _check_positive(data, col, arg_name):
             '混じった誤ったグラフになります）'))
 
 
+def _check_text_col(data, text_col, func_name):
+    """text=True のときに text_col が使えるかを確認する（内部用）"""
+    if text_col is None:
+        columns = '、'.join(str(c) for c in data.columns)
+        raise ValueError(_err(
+            'text=True にするときは text_col の指定が必要です。',
+            '点の横にどの列の名前を表示すればよいか分かりません。',
+            f'{func_name}(..., text=True, text_col="産業") のように、'
+            '表示したい名前が入っている列名を指定してください。\n'
+            f'        使える列名 → {columns}'))
+    _check_column(data, text_col, 'text_col')
+
+
 def _label(value):
     """マーカー横に表示する文字列を安全に作る（内部用）
 
@@ -96,79 +109,209 @@ def _label(value):
     return str(value)[:6]
 
 
+def _format_p(p):
+    """p値を、小さすぎて 0 に見えないように整形する（内部用）"""
+    if p < 0.0001:
+        return '<0.0001'
+    return f'{p:.4f}'
+
+
+def _stars(p):
+    """有意性の星印を返す（内部用）"""
+    if p < 0.01:
+        return '***'
+    if p < 0.05:
+        return '**'
+    if p < 0.1:
+        return '*'
+    return ''
+
+
+def _unwrap(res):
+    """RegressionResult でも statsmodels の結果でも、statsmodels の結果を返す（内部用）"""
+    return getattr(res, 'result', res)
+
+
+def _fit_ols(Y, X, robust):
+    """OLS推定をおこない、結果と標準誤差の種類の説明を返す（内部用）"""
+    if robust:
+        return sm.OLS(Y, X).fit(cov_type='HC3'), '不均一分散に頑健な標準誤差（HC3）'
+    return sm.OLS(Y, X).fit(), '通常の標準誤差'
+
+
+# ============================================================
+# 回帰分析の結果オブジェクト
+# ============================================================
+
+class RegressionResult:
+    """回帰分析の結果。
+
+    Colab や Jupyter のセルの最後に置くと、結果表として表示される。
+    statsmodels の結果オブジェクトが持つ属性（params、rsquared など）も
+    そのまま使うことができ、元のオブジェクトは .result で取り出せる。
+    """
+
+    def __init__(self, result, header, table, footnote=''):
+        # __getattr__ が無限に呼ばれるのを避けるため object.__setattr__ を使う
+        object.__setattr__(self, 'result', result)
+        object.__setattr__(self, 'table', table)
+        object.__setattr__(self, '_header', header)
+        object.__setattr__(self, '_footnote', footnote)
+
+    def __getattr__(self, name):
+        # 自分が持っていない属性は statsmodels の結果オブジェクトに転送する
+        if name.startswith('_'):
+            raise AttributeError(name)
+        return getattr(object.__getattribute__(self, 'result'), name)
+
+    def __dir__(self):
+        return sorted(set(list(super().__dir__()) + dir(self.result)))
+
+    def __repr__(self):
+        """文字だけで表示するとき（端末、print(...) など）"""
+        lines = [f'{k}：{v}' for k, v in self._header]
+        body = '\n'.join(lines) + '\n\n' + self.table.to_string()
+        if self._footnote:
+            body += '\n\n' + self._footnote
+        return body
+
+    def _repr_html_(self):
+        """Colab や Jupyter で表示するとき"""
+        from html import escape
+        head = ''.join(
+            f'<tr>'
+            f'<td style="padding:1px 12px 1px 0; white-space:nowrap;">{escape(str(k))}</td>'
+            f'<td style="padding:1px 0;">{escape(str(v))}</td>'
+            f'</tr>'
+            for k, v in self._header
+        )
+        # 脚注には「<」が含まれるため、HTMLにするときだけエスケープする
+        foot = (f'<div style="margin-top:6px; font-size:90%;">'
+                f'{escape(self._footnote)}</div>'
+                if self._footnote else '')
+        return (
+            '<div>'
+            f'<table style="border:none; margin-bottom:8px;"><tbody>{head}</tbody></table>'
+            f'{self.table.to_html()}'
+            f'{foot}'
+            '</div>'
+        )
+
+
 # ============================================================
 # 学生が使う関数
 # ============================================================
 
-def regression(x, y, data):
-    """回帰分析の結果を表示する。
+def regression(x, y, data, robust=False, alpha=0.05, stars=True):
+    """最小二乗法（OLS）による回帰分析をおこなう。
 
-    xを説明変数、yを被説明変数として単回帰分析をおこない、
-    標本の大きさ・決定係数・傾きの95%信頼区間・回帰式を画面に表示します。
-
-    ＊注意＊ 引数は「x（説明変数）→ y（被説明変数）→ data」の順です。
-    回帰式 y = a × x + b の見た目とは順番が逆になるので気をつけてください。
+    xを説明変数、yを被説明変数として回帰分析をおこない、
+    結果を表にして返します。Colabのセルの最後に置くと表が表示されます。
 
     引数
     ----
-    x : 文字列
+    x : 文字列 または 文字列のリスト
         説明変数（横軸にあたる変数）の列名。
+        リストで複数指定すると重回帰分析になります。
+        例： x='特化係数'
+        例： x=['特化係数', '事業所数']
     y : 文字列
         被説明変数（縦軸にあたる変数）の列名。
     data : DataFrame
         xとyの列を含むデータフレーム。
+    robust : True または False
+        Falseなら通常の標準誤差、Trueなら不均一分散に頑健な標準誤差（HC3）
+        を使います。どちらを使ったかは結果の見出しに表示されます。
+    alpha : 数値
+        有意水準。信頼区間は (1 - alpha) × 100 ％ で計算されます。
+        初期値0.05は95％信頼区間にあたります。
+    stars : True または False
+        Trueで「有意性」の列に星印を追加します。
+
+    戻り値
+    ------
+    RegressionResult
+        セルの最後に置くと結果表として表示されます。
+        result.params のように statsmodels の属性も使えます。
+        元のstatsmodelsのオブジェクトは result.result で取り出せます。
 
     表示される内容
     --------------
-    標本の大きさ n : 分析に使ったデータの行数。
-    決定係数 R²    : xがyの変動をどれくらい説明できているかを示す0〜1の値。
-                     1に近いほどよく説明できている。
-    信頼区間 (95%) : 傾きの値がこの範囲に入ると考えられる区間。
-                     この区間が1をまたいでいなければ、傾きは1と異なると判断できる。
-    回帰式         : 推定された直線の式。
+    決定係数 R²  : xがyの変動をどれくらい説明できているかを示す0〜1の値。
+                   1に近いほどよく説明できている。
+    推定値       : 推定された係数。
+    p値          : その係数が0であると考えたときに、
+                   これほどの値が偶然得られる確率。小さいほど0とは考えにくい。
+    信頼区間     : 係数の値がこの範囲に入ると考えられる区間。
 
     使用例
     ------
-    >>> regression('全国成長効果', '実際の変化', df)
+    >>> regression('特化係数', '地域固有効果', df)
+    >>> regression(['特化係数', '事業所数'], '地域固有効果', df)
+    >>> regression('特化係数', '地域固有効果', df, robust=True)
+
+    注意点
+    ------
+    セルの最後に置かないと結果表は表示されません。
+    変数に入れた場合（res = regression(...)）は、
+    次の行に res と書くと表示されます。
     """
     _check_dataframe(data)
-    _check_column(data, x, 'x')
+
+    # 文字列1つで渡された場合もリストとして扱う
+    if isinstance(x, str):
+        x = [x]
+    x = list(x)
+
     _check_column(data, y, 'y')
-    _check_numeric(data, x, 'x')
     _check_numeric(data, y, 'y')
-    _check_missing(data, x, 'x')
-    _check_missing(data, y, 'y')
+    for col in x:
+        _check_column(data, col, 'x')
+        _check_numeric(data, col, 'x')
     _check_sample_size(data)
 
-    d = data.copy()
-    n = len(d)
-    _x = d[x]
-    _y = d[y]
-    r, pp = stats.pearsonr(_x, _y)
-    res = stats.linregress(_x, _y)
-    t = (res.slope - 1) / res.stderr
-    p = 2 * (1 - stats.t.cdf(abs(t), n-2))
-    t_crit = stats.t.ppf(0.975, n-2)
-    ci = (res.slope - t_crit*res.stderr, res.slope + t_crit*res.stderr)
-    ci_left = ci[0]
-    ci_right = ci[1]
+    # 使用する列だけ取り出し、欠損値のある行を除く
+    df = data[[y] + x].dropna()
+    n_dropped = len(data) - len(df)
 
-    print('推定式:  yᵢ = b₀ + b₁·xᵢ + uᵢ,  i = 1, 2, …, n')
-    print(f'標本の大きさ(n): {n}')
-    print(f'決定係数(R²) : {r**2:.3f}')
-    print(f'b₀ の推定値  : {res.intercept:.3f}')
-    print(f'b₁ の推定値  : {res.slope:.3f}')
-    print(f'b₁ の95%信頼区間 : [{ci_left:.3f}, {ci_right:.3f}]')
+    Y = df[y]
+    X = sm.add_constant(df[x], has_constant='add')   # 定数項（切片）を必ず追加
+
+    result, se_type = _fit_ols(Y, X, robust)
+
+    # ---- 見出し ----
+    header = [('被説明変数', y),
+              ('サンプルの大きさ', int(result.nobs))]
+    if n_dropped > 0:
+        header.append(('欠損値のため除外', f'{n_dropped} 行'))
+    header += [('決定係数', f'{result.rsquared:.4f}'),
+               ('自由度調整済み決定係数', f'{result.rsquared_adj:.4f}'),
+               ('標準誤差の種類', se_type),
+               ('信頼区間の水準', f'{(1 - alpha) * 100:.0f} ％')]
+
+    # ---- 係数の表 ----
+    ci = result.conf_int(alpha=alpha)
+    table = pd.DataFrame({
+        '推定値':      result.params.round(4),
+        'p値':         result.pvalues.map(_format_p),
+        '信頼区間下限': ci[0].round(4),
+        '信頼区間上限': ci[1].round(4),
+    })
+
+    footnote = ''
+    if stars:
+        table['有意性'] = result.pvalues.map(_stars)
+        footnote = '星印：*** p<0.01　** p<0.05　* p<0.1'
+
+    table.index.name = '変数'
+    table = table.rename(index={'const': '定数項'})
+
+    return RegressionResult(result, header, table, footnote)
 
 
-def regression_plot(x, y, data, title='', xlabel=None, ylabel=None,
-                    line=True, text=True, text_col='産業'):
+def regression_plot(x=None, y=None, data=None, title='', xlabel=None, ylabel=None,
+                    line=True, text=False, text_col=None, robust=False, *, ols_res=None):
     """散布図に回帰直線を重ねて表示する。
-
-    点の散らばり方と、そこに当てはめた直線を同時に確認できます。
-    タイトル部分には回帰式と傾きの95%信頼区間も表示されます。
-
-    ＊注意＊ 引数は「x（説明変数）→ y（被説明変数）→ data」の順です。
 
     引数
     ----
@@ -179,70 +322,127 @@ def regression_plot(x, y, data, title='', xlabel=None, ylabel=None,
     data : DataFrame
         xとyの列を含むデータフレーム。
     title : 文字列
-        グラフの上に表示するタイトル。省略すると回帰式だけが表示されます。
+        グラフの上に表示するタイトル。
     xlabel : 文字列
         横軸のラベル。省略するとxの列名がそのまま使われます。
     ylabel : 文字列
         縦軸のラベル。省略するとyの列名がそのまま使われます。
     line : True または False
-        Trueで回帰直線を引きます。Falseにすると点だけの散布図になります。
+        Trueで回帰直線を引き、推定式をタイトルに表示します。
     text : True または False
-        Trueで各点の横に名前を表示します。点が多くて重なる場合はFalseにしてください。
+        Trueで各点の横に名前を表示します。
+        Trueにするときは text_col の指定が必要です。
     text_col : 文字列
-        点の横に表示する名前が入っている列名。初期値は '産業' です。
-        都道府県名を表示したい場合は text_col='都道府県' のように指定します。
+        点の横に表示する名前が入っている列名。
+        例： text_col='産業'、text_col='都道府県'
         名前は先頭6文字までが表示されます。
+    robust : True または False
+        Falseなら通常の標準誤差、Trueなら不均一分散に頑健な標準誤差（HC3）
+        を使います。回帰直線そのものはどちらでも変わりません。
+    ols_res : regression の結果（キーワード指定のみ）
+        regression で計算した結果を渡すと、その結果をそのまま使って
+        図を描きます。この場合 x、y、data の指定は不要です。
 
     使用例
     ------
     >>> regression_plot('特化係数', '地域固有効果', df, title='大阪府')
-    >>> regression_plot('特化係数', '地域固有効果', df, text=False)
+    >>> regression_plot('特化係数', '地域固有効果', df, text=True, text_col='産業')
+    >>> res = regression('特化係数', '地域固有効果', df)
+    >>> regression_plot(ols_res=res)
+
+    注意点
+    ------
+    ols_res を渡す場合、回帰分析に使われた変数が1つのときだけ図を描けます。
+    重回帰の結果は横軸を1つに決められないため、図にできません。
     """
-    _check_dataframe(data)
-    _check_column(data, x, 'x')
-    _check_column(data, y, 'y')
-    _check_numeric(data, x, 'x')
-    _check_numeric(data, y, 'y')
-    _check_missing(data, x, 'x')
-    _check_missing(data, y, 'y')
-    _check_sample_size(data)
-    if text:
-        _check_column(data, text_col, 'text_col')
+    if ols_res is not None:
+        # ---- regression の結果をそのまま使う ----
+        result = _unwrap(ols_res)
+        exog_names = list(result.model.exog_names)
 
-    if xlabel == None:
-        xlabel = x
-    if ylabel == None:
-        ylabel = y
+        if len(exog_names) != 2:
+            raise ValueError(_err(
+                '重回帰の結果は散布図にできません。',
+                f'渡された結果には説明変数が{len(exog_names) - 1}個あり、'
+                '横軸をどれにすればよいか決められません。',
+                '説明変数が1つだけの回帰分析の結果を渡すか、'
+                'regression_plot(x=..., y=..., data=...) の形で'
+                '図にしたい2つの変数を指定してください。'))
 
-    data = data.copy()
-    n = len(data)
-    _x = data[x]
-    _y = data[y]
-    r, p = stats.pearsonr(_x, _y)
-    res = stats.linregress(_x, _y)
-    t = (res.slope - 1) / res.stderr
-    p = 2 * (1 - stats.t.cdf(abs(t), n-2))
-    t_crit = stats.t.ppf(0.975, n-2)
-    ci = (res.slope - t_crit*res.stderr, res.slope + t_crit*res.stderr)
-    ci_left = ci[0]
-    ci_right = ci[1]
+        # 定数項ではないほうの列を横軸に使う
+        const_pos = exog_names.index('const') if 'const' in exog_names else 0
+        x_pos = 1 - const_pos
+
+        _y = pd.Series(np.asarray(result.model.endog))
+        _x = pd.Series(np.asarray(result.model.exog)[:, x_pos])
+
+        y_name = result.model.endog_names
+        x_name = exog_names[x_pos]
+
+        intercept = float(result.params.iloc[const_pos])
+        slope = float(result.params.iloc[x_pos])
+
+        if text:
+            raise ValueError(_err(
+                'ols_res を渡した場合は text=True を使えません。',
+                '結果のオブジェクトには、点の横に表示する名前が含まれていません。',
+                'regression_plot(x=..., y=..., data=..., text=True, text_col="産業") '
+                'のように、データフレームを直接渡してください。'))
+
+        plot_data = None
+
+    else:
+        # ---- x、y、data から計算する ----
+        _check_dataframe(data)
+        _check_column(data, x, 'x')
+        _check_column(data, y, 'y')
+        _check_numeric(data, x, 'x')
+        _check_numeric(data, y, 'y')
+        _check_missing(data, x, 'x')
+        _check_missing(data, y, 'y')
+        _check_sample_size(data)
+        if text:
+            _check_text_col(data, text_col, 'regression_plot')
+
+        plot_data = data.copy()
+        _x = plot_data[x]
+        _y = plot_data[y]
+        y_name, x_name = y, x
+
+        X = sm.add_constant(_x, has_constant='add')
+        result, _ = _fit_ols(_y, X, robust)
+        intercept = float(result.params.iloc[0])
+        slope = float(result.params.iloc[1])
+
+    if xlabel is None:
+        xlabel = x_name
+    if ylabel is None:
+        ylabel = y_name
 
     fig, ax = plt.subplots()
     ax.scatter(_x, _y, s=60, color='steelblue', zorder=3)
-    if text:
-        for _, row in data.iterrows():
+
+    if text and plot_data is not None:
+        for _, row in plot_data.iterrows():
             ax.annotate(_label(row[text_col]), (row[x], row[y]), fontsize=8, alpha=0.85)
+
+    # 回帰直線とタイトルは別々に判定する
+    # （title='' のときに回帰直線が消えてしまわないようにするため）
     if line:
         xs = np.linspace(_x.min(), _x.max(), 50)
-        ax.plot(xs, res.slope*xs + res.intercept, color='crimson', linewidth=2,
-                # label=f'回帰直線 (r={r:+.3f}, p値={p:.3f})')
-            label=f'回帰直線')
+        ax.plot(xs, slope * xs + intercept, color='crimson', linewidth=2,
+                label='回帰直線')
         ax.legend()
-        ax.set_title(f'{title}\n'+
-                     f'推定式: {y} = {res.intercept:.2f}  {res.slope:+.2f} × {x}\n'+
-                     f'スロープ係数の信頼区間 (95%)： [{ci_left:.2f}, {ci_right:.2f}]')
-    else:
-        ax.set_title(f'{title}')
+
+    title_lines = []
+    if title:
+        title_lines.append(title)
+    if line:
+        title_lines.append(
+            f'推定式: {ylabel} = {intercept:.4f} + {slope:.4f} × {xlabel}')
+    if title_lines:
+        ax.set_title('\n'.join(title_lines))
+
     if _y.min() < 0 < _y.max():
         ax.axhline(0, color='gray', linewidth=0.8)
     if _x.min() < 0 < _x.max():
@@ -255,10 +455,11 @@ def regression_plot(x, y, data, title='', xlabel=None, ylabel=None,
 
 
 def scatter_plot(x, y, data, title='', xlabel=None, ylabel=None,
-                 line=True, text=True, text_col='産業', xlog=False, ylog=False, xylog=False):
+                 line=True, text=False, text_col=None,
+                 xlog=False, ylog=False, xylog=False):
     """散布図にトレンド線を重ねて表示する。
 
-    regression_plotとよく似ていますが、こちらは回帰式や信頼区間を表示せず、
+    regression_plotとよく似ていますが、こちらは推定式を表示せず、
     データの傾向を目で確かめることを目的としています。
     値の大きさが極端に違う変数を扱うときは、対数化のオプションが使えます。
 
@@ -279,9 +480,11 @@ def scatter_plot(x, y, data, title='', xlabel=None, ylabel=None,
     line : True または False
         Trueでトレンド線（当てはめた直線）を引きます。
     text : True または False
-        Trueで各点の横に名前を表示します。点が多くて重なる場合はFalseにしてください。
+        Trueで各点の横に名前を表示します。
+        Trueにするときは text_col の指定が必要です。
     text_col : 文字列
-        点の横に表示する名前が入っている列名。初期値は '産業' です。
+        点の横に表示する名前が入っている列名。
+        例： text_col='産業'、text_col='都道府県'
         名前は先頭6文字までが表示されます。
     xlog : True または False
         Trueで横軸の変数を常用対数（log10）に変換します。
@@ -289,17 +492,16 @@ def scatter_plot(x, y, data, title='', xlabel=None, ylabel=None,
         Trueで縦軸の変数を常用対数（log10）に変換します。
     xylog : True または False
         Trueで横軸と縦軸の両方を常用対数に変換します。
-        xlog=True, ylog=True と書くのと同じ意味です。
 
     使用例
     ------
     >>> scatter_plot('従業者数', '売上高', df)
-    >>> scatter_plot('従業者数', '売上高', df, xylog=True, text=False)
+    >>> scatter_plot('従業者数', '売上高', df, xylog=True)
+    >>> scatter_plot('従業者数', '売上高', df, text=True, text_col='産業')
 
     注意点
     ------
     対数をとる列に0以下の値が含まれているとエラーになります。
-    従業者数や売上高が0の行がある場合は、あらかじめ取り除いてください。
     """
     _check_dataframe(data)
     _check_column(data, x, 'x')
@@ -309,51 +511,50 @@ def scatter_plot(x, y, data, title='', xlabel=None, ylabel=None,
     _check_missing(data, x, 'x')
     _check_missing(data, y, 'y')
     if text:
-        _check_column(data, text_col, 'text_col')
+        _check_text_col(data, text_col, 'scatter_plot')
     if xlog or xylog:
         _check_positive(data, x, 'x')
     if ylog or xylog:
         _check_positive(data, y, 'y')
 
-    if xlabel == None:
+    if xlabel is None:
         xlabel = x
-    if ylabel == None:
+    if ylabel is None:
         ylabel = y
 
     data = data.copy()
 
     if xlog or xylog:
-        data[x+'_log'] = np.log10(data[x])
-        _x = data[x+'_log']
+        data[x + '_log'] = np.log10(data[x])
+        x_plot = x + '_log'
     else:
-        _x = data[x]
+        x_plot = x
 
     if ylog or xylog:
-        data[y+'_log'] = np.log10(data[y])
-        _y = data[y+'_log']
+        data[y + '_log'] = np.log10(data[y])
+        y_plot = y + '_log'
     else:
-        _y = data[y]
+        y_plot = y
+
+    _x = data[x_plot]
+    _y = data[y_plot]
 
     fig, ax = plt.subplots()
     ax.scatter(_x, _y, s=60, color='steelblue', zorder=3)
 
-    if (text and  xlog and ylog) or (text and xylog):
+    if text:
         for _, row in data.iterrows():
-            ax.annotate(_label(row[text_col]), (row[x+'_log'], row[y+'_log']), fontsize=8, alpha=0.85)
-    elif text and xlog and (not ylog):
-        for _, row in data.iterrows():
-            ax.annotate(_label(row[text_col]), (row[x+'_log'], row[y]), fontsize=8, alpha=0.85)
-    elif text and (not xlog) and ylog:
-        for _, row in data.iterrows():
-            ax.annotate(_label(row[text_col]), (row[x], row[y+'_log']), fontsize=8, alpha=0.85)
-    else:
-        for _, row in data.iterrows():
-            ax.annotate(_label(row[text_col]), (row[x], row[y]), fontsize=8, alpha=0.85)
+            ax.annotate(_label(row[text_col]), (row[x_plot], row[y_plot]),
+                        fontsize=8, alpha=0.85)
 
     if line:
-        res = stats.linregress(_x, _y)
+        X = sm.add_constant(_x, has_constant='add')
+        res = sm.OLS(_y, X).fit()
+        intercept = float(res.params.iloc[0])
+        slope = float(res.params.iloc[1])
         xs = np.linspace(_x.min(), _x.max(), 50)
-        ax.plot(xs, res.slope*xs + res.intercept, color='crimson', linewidth=2, label=f'トレンド線')
+        ax.plot(xs, slope * xs + intercept, color='crimson', linewidth=2,
+                label='トレンド線')
         ax.legend()
 
     if _y.min() < 0 < _y.max():
@@ -404,12 +605,10 @@ def bar_plot(x, data, title='', xlabel=None, unit=1000,
     unit : 数値 または 辞書
         値を割る数。表示の桁を調整するために使います。
         1000 なら千単位、0.01 なら百分率（％）の表示になります。
-        すべての列に同じ単位を使う場合は数値をひとつ渡します（初期値は1000）。
         列ごとに変えたい場合は辞書で渡します。
         例： unit={'地域固有効果': 1000, '特化係数': 1}
     sort_by : 文字列 または None
         棒を並べる順番を決める列名。初期値は '産業コード' です。
-        値の大きい順に並べたいときは、その列名を指定します。
         Noneを渡すと、xの最初の列の値で並べ替えます。
     tick_label : 文字列
         縦軸に表示する名前が入っている列名。初期値は '産業' です。
@@ -495,7 +694,7 @@ def bar_plot(x, data, title='', xlabel=None, unit=1000,
         ax.barh(y + offset, data[col] / unit_map[col], height=bar_height,
                 color=color, label=col)
 
-    if ( data[x_list] < 0 ).any().sum() > 0:
+    if (data[x_list] < 0).any().sum() > 0:
         ax.axvline(0, color='gray', linewidth=0.8)
 
     ax.set_yticks(y)
@@ -535,10 +734,8 @@ def box_plot(x, data, title='', text_col='産業', xlabel=None, xlog=False):
     xlabel : 文字列のリスト
         横軸に表示するラベルのリスト。
         省略するとxの列名がそのまま使われます。
-        xに渡した列の数と同じ数のラベルを指定してください。
     xlog : True または False
         Trueでデータを常用対数（log10）に変換してから箱ひげ図を描きます。
-        値の大きさが極端に違う場合に使います。
 
     使用例
     ------
@@ -559,10 +756,10 @@ def box_plot(x, data, title='', text_col='産業', xlabel=None, xlog=False):
             '例： box_plot("地域固有効果", df) '
             '（box_plot(df, "地域固有効果") ではありません）'))
 
-    if (xlabel == None) and ( not isinstance(x, list) ):
+    if (xlabel is None) and (not isinstance(x, list)):
         x = [x]
         xlabel = x
-    elif (xlabel == None) and isinstance(x, list):
+    elif (xlabel is None) and isinstance(x, list):
         xlabel = x
     elif not isinstance(x, list):
         x = [x]
@@ -592,42 +789,29 @@ def box_plot(x, data, title='', text_col='産業', xlabel=None, xlog=False):
     fig, ax = plt.subplots()
 
     if xlog:
-        x_log = [s+'_log' for s in x]
+        x_log = [s + '_log' for s in x]
         tmp = np.log10(data[x])
         tmp.columns = x_log
         data = pd.concat([data, tmp], axis='columns')
         ax.boxplot(data[x_log], tick_labels=xlabel, showmeans=True, showfliers=False)
-
-        for i, col in enumerate(x_log, start=1):
-                _data = data[col]
-                q1, q3 = _data.quantile(0.25), _data.quantile(0.75)
-                iqr = q3 - q1
-                lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
-                cond = ( data[col] < lower ) | ( data[col] > upper )
-                outliers = data.loc[cond,:]
-
-                ax.scatter([i] * len(outliers), outliers[col], color='C0', zorder=3)
-                for _, row in outliers.iterrows():
-                    ax.annotate(_label(row[text_col]), (i, row[col]),
-                                textcoords="offset points", xytext=(6, 0),
-                                fontsize=8, ha='left')
-
+        cols = x_log
     else:
         ax.boxplot(data[x], tick_labels=xlabel, showmeans=True)
+        cols = x
 
-        for i, col in enumerate(x, start=1):
-            _data = data[col]
-            q1, q3 = _data.quantile(0.25), _data.quantile(0.75)
-            iqr = q3 - q1
-            lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
-            cond = ( data[col] < lower ) | ( data[col] > upper )
-            outliers = data.loc[cond,:]
+    for i, col in enumerate(cols, start=1):
+        _data = data[col]
+        q1, q3 = _data.quantile(0.25), _data.quantile(0.75)
+        iqr = q3 - q1
+        lower, upper = q1 - 1.5 * iqr, q3 + 1.5 * iqr
+        cond = (data[col] < lower) | (data[col] > upper)
+        outliers = data.loc[cond, :]
 
-            ax.scatter([i] * len(outliers), outliers[col], color='C0', zorder=3)
-            for _, row in outliers.iterrows():
-                ax.annotate(_label(row[text_col]), (i, row[col]),
-                            textcoords="offset points", xytext=(6, 0),
-                            fontsize=8, ha='left')
+        ax.scatter([i] * len(outliers), outliers[col], color='C0', zorder=3)
+        for _, row in outliers.iterrows():
+            ax.annotate(_label(row[text_col]), (i, row[col]),
+                        textcoords="offset points", xytext=(6, 0),
+                        fontsize=8, ha='left')
 
     ax.set_title(f'{title}')
     plt.show()
