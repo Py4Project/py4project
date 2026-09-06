@@ -127,6 +127,14 @@ def _stars(p):
     return ''
 
 
+def _float_format(v):
+    """表の数値を小数第4位までの通常表記にする（内部用）
+
+    pandas は桁の開きが大きい列を自動的に科学記法（1.948712e+06）にしてしまうため、
+    表示のときだけ書式を固定する。表そのものは数値のままなので計算にも使える。"""
+    return f'{v:.4f}'
+
+
 def _unwrap(res):
     """RegressionResult でも statsmodels の結果でも、statsmodels の結果を返す（内部用）"""
     return getattr(res, 'result', res)
@@ -135,8 +143,8 @@ def _unwrap(res):
 def _fit_ols(Y, X, robust):
     """OLS推定をおこない、結果と標準誤差の種類の説明を返す（内部用）"""
     if robust:
-        return sm.OLS(Y, X).fit(cov_type='HC3'), '不均一分散に頑健な標準誤差（HC3）'
-    return sm.OLS(Y, X).fit(), '通常の標準誤差'
+        return sm.OLS(Y, X).fit(cov_type='HC3'), '不均一分散頑健(HC3)'
+    return sm.OLS(Y, X).fit(), '非頑健'
 
 
 # ============================================================
@@ -170,7 +178,8 @@ class RegressionResult:
     def __repr__(self):
         """文字だけで表示するとき（端末、print(...) など）"""
         lines = [f'{k}：{v}' for k, v in self._header]
-        body = '\n'.join(lines) + '\n\n' + self.table.to_string()
+        body = ('\n'.join(lines) + '\n\n'
+                + self.table.to_string(float_format=_float_format))
         if self._footnote:
             body += '\n\n' + self._footnote
         return body
@@ -192,7 +201,7 @@ class RegressionResult:
         return (
             '<div>'
             f'<table style="border:none; margin-bottom:8px;"><tbody>{head}</tbody></table>'
-            f'{self.table.to_html()}'
+            f'{self.table.to_html(float_format=_float_format)}'
             f'{foot}'
             '</div>'
         )
@@ -220,8 +229,9 @@ def regression(x, y, data, robust=False, alpha=0.05, stars=True):
     data : DataFrame
         xとyの列を含むデータフレーム。
     robust : True または False
-        Falseなら通常の標準誤差、Trueなら不均一分散に頑健な標準誤差（HC3）
-        を使います。どちらを使ったかは結果の見出しに表示されます。
+        Falseなら通常の標準誤差（表には「非頑健」と表示）、
+        Trueなら不均一分散に強い標準誤差（表には「不均一分散頑健(HC3)」と表示）
+        を使います。
     alpha : 数値
         有意水準。信頼区間は (1 - alpha) × 100 ％ で計算されます。
         初期値0.05は95％信頼区間にあたります。
@@ -309,7 +319,7 @@ def regression(x, y, data, robust=False, alpha=0.05, stars=True):
     return RegressionResult(result, header, table, footnote)
 
 
-def regression_plot(x=None, y=None, data=None, title='', xlabel=None, ylabel=None,
+def regression_plot(x=None, y=None, data=None, title=None, xlabel=None, ylabel=None,
                     line=True, text=False, text_col=None, robust=False, *, ols_res=None):
     """散布図に回帰直線を重ねて表示する。
 
@@ -322,7 +332,7 @@ def regression_plot(x=None, y=None, data=None, title='', xlabel=None, ylabel=Non
     data : DataFrame
         xとyの列を含むデータフレーム。
     title : 文字列
-        グラフの上に表示するタイトル。
+        グラフの上に表示するタイトル。省略すると推定式だけが表示されます。
     xlabel : 文字列
         横軸のラベル。省略するとxの列名がそのまま使われます。
     ylabel : 文字列
@@ -337,7 +347,7 @@ def regression_plot(x=None, y=None, data=None, title='', xlabel=None, ylabel=Non
         例： text_col='産業'、text_col='都道府県'
         名前は先頭6文字までが表示されます。
     robust : True または False
-        Falseなら通常の標準誤差、Trueなら不均一分散に頑健な標準誤差（HC3）
+        Falseなら通常の標準誤差、Trueなら不均一分散に強い標準誤差（HC3）
         を使います。回帰直線そのものはどちらでも変わりません。
     ols_res : regression の結果（キーワード指定のみ）
         regression で計算した結果を渡すと、その結果をそのまま使って
@@ -427,7 +437,7 @@ def regression_plot(x=None, y=None, data=None, title='', xlabel=None, ylabel=Non
             ax.annotate(_label(row[text_col]), (row[x], row[y]), fontsize=8, alpha=0.85)
 
     # 回帰直線とタイトルは別々に判定する
-    # （title='' のときに回帰直線が消えてしまわないようにするため）
+    # （title を省略したときに回帰直線が消えてしまわないようにするため）
     if line:
         xs = np.linspace(_x.min(), _x.max(), 50)
         ax.plot(xs, slope * xs + intercept, color='crimson', linewidth=2,
@@ -454,7 +464,7 @@ def regression_plot(x=None, y=None, data=None, title='', xlabel=None, ylabel=Non
     plt.show()
 
 
-def scatter_plot(x, y, data, title='', xlabel=None, ylabel=None,
+def scatter_plot(x, y, data, title=None, xlabel=None, ylabel=None,
                  line=True, text=False, text_col=None,
                  xlog=False, ylog=False, xylog=False):
     """散布図にトレンド線を重ねて表示する。
@@ -472,7 +482,7 @@ def scatter_plot(x, y, data, title='', xlabel=None, ylabel=None,
     data : DataFrame
         xとyの列を含むデータフレーム。
     title : 文字列
-        グラフの上に表示するタイトル。
+        グラフの上に表示するタイトル。省略するとタイトルなしになります。
     xlabel : 文字列
         横軸のラベル。省略するとxの列名がそのまま使われます。
     ylabel : 文字列
@@ -562,7 +572,8 @@ def scatter_plot(x, y, data, title='', xlabel=None, ylabel=None,
     if _x.min() < 0 < _x.max():
         ax.axvline(0, color='gray', linewidth=0.8)
 
-    ax.set_title(f'{title}')
+    if title:
+        ax.set_title(title)
     ax.set_xlabel(f'{xlabel}')
     ax.set_ylabel(f'{ylabel}')
     ax.grid(alpha=0.3)
@@ -580,7 +591,7 @@ _COLOR_MAP = {
 }
 
 
-def bar_plot(x, data, title='', xlabel=None, unit=1000,
+def bar_plot(x, data, title=None, xlabel=None, unit=1000,
              sort_by='産業コード', tick_label='産業', ascending=None):
     """横向きの棒グラフを表示する。
 
@@ -599,7 +610,7 @@ def bar_plot(x, data, title='', xlabel=None, unit=1000,
     data : DataFrame
         xの列を含むデータフレーム。
     title : 文字列
-        グラフの上に表示するタイトル。
+        グラフの上に表示するタイトル。省略するとタイトルなしになります。
     xlabel : 文字列
         横軸のラベル。省略すると列名と単位から自動でつくられます。
     unit : 数値 または 辞書
@@ -700,7 +711,8 @@ def bar_plot(x, data, title='', xlabel=None, unit=1000,
     ax.set_yticks(y)
     ax.set_yticklabels(data[tick_label])
     ax.set_xlabel(xlabel)
-    ax.set_title(title)
+    if title:
+        ax.set_title(title)
     ax.invert_yaxis()
     ax.grid(axis='x', alpha=0.3)
     if n > 1:
@@ -709,12 +721,12 @@ def bar_plot(x, data, title='', xlabel=None, unit=1000,
     plt.show()
 
 
-def box_plot(x, data, title='', text_col='産業', xlabel=None, xlog=False):
+def box_plot(x, data, title=None, text_col=None, xlabel=None, xlog=False):
     """箱ひげ図を表示する。
 
     データの散らばり方（中央値・四分位数・外れ値）を確認するための図です。
     箱の中の線が中央値、三角の印が平均値を表します。
-    外れ値には自動的に名前が表示されるので、
+    text_col を指定すると、外れ値の横に名前が表示されるので、
     どの産業や都道府県が極端な値をとっているかが分かります。
 
     引数
@@ -727,9 +739,11 @@ def box_plot(x, data, title='', text_col='産業', xlabel=None, xlog=False):
     data : DataFrame
         xの列を含むデータフレーム。
     title : 文字列
-        グラフの上に表示するタイトル。
+        グラフの上に表示するタイトル。省略するとタイトルなしになります。
     text_col : 文字列
-        外れ値の横に表示する名前が入っている列名。初期値は '産業' です。
+        外れ値の横に表示する名前が入っている列名。
+        省略すると名前は表示されず、外れ値は点だけで表示されます。
+        例： text_col='産業'、text_col='都道府県'
         名前は先頭6文字までが表示されます。
     xlabel : 文字列のリスト
         横軸に表示するラベルのリスト。
@@ -741,6 +755,7 @@ def box_plot(x, data, title='', text_col='産業', xlabel=None, xlog=False):
     ------
     >>> box_plot('地域固有効果', df)
     >>> box_plot(['全国成長効果', '産業構成効果', '地域固有効果'], df)
+    >>> box_plot('地域固有効果', df, text_col='産業')
     >>> box_plot('売上高', df, xlog=True)
 
     注意点
@@ -770,7 +785,8 @@ def box_plot(x, data, title='', text_col='産業', xlabel=None, xlog=False):
     for col in x:
         _check_column(data, col, 'x')
         _check_numeric(data, col, 'x')
-    _check_column(data, text_col, 'text_col')
+    if text_col is not None:
+        _check_column(data, text_col, 'text_col')
 
     if len(xlabel) != len(x):
         raise ValueError(_err(
@@ -807,11 +823,17 @@ def box_plot(x, data, title='', text_col='産業', xlabel=None, xlog=False):
         cond = (data[col] < lower) | (data[col] > upper)
         outliers = data.loc[cond, :]
 
+        # 外れ値の点は常に表示する
+        # （xlog=True のときは showfliers=False にしているため、ここで描く必要がある）
         ax.scatter([i] * len(outliers), outliers[col], color='C0', zorder=3)
-        for _, row in outliers.iterrows():
-            ax.annotate(_label(row[text_col]), (i, row[col]),
-                        textcoords="offset points", xytext=(6, 0),
-                        fontsize=8, ha='left')
 
-    ax.set_title(f'{title}')
+        # 名前は text_col が指定されたときだけ添える
+        if text_col is not None:
+            for _, row in outliers.iterrows():
+                ax.annotate(_label(row[text_col]), (i, row[col]),
+                            textcoords="offset points", xytext=(6, 0),
+                            fontsize=8, ha='left')
+
+    if title:
+        ax.set_title(title)
     plt.show()

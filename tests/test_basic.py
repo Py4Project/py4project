@@ -73,6 +73,73 @@ def test_box_plot_runs(sample_df):
     box_plot("全国成長効果", sample_df)
 
 
+def test_title_default_is_none_everywhere():
+    """4つの作図関数すべてで title の既定値が None であることの確認"""
+    import inspect
+    for fn in (regression_plot, scatter_plot, bar_plot, box_plot):
+        assert inspect.signature(fn).parameters["title"].default is None, fn.__name__
+
+
+def test_omitted_title_never_shows_none(sample_df):
+    """title を省略したときに文字列 'None' が表示されないことの確認"""
+    calls = [
+        lambda: regression_plot("全国成長効果", "産業構成効果", sample_df),
+        lambda: scatter_plot("全国成長効果", "産業構成効果", sample_df),
+        lambda: bar_plot("全国成長効果", sample_df),
+        lambda: box_plot("全国成長効果", sample_df),
+    ]
+    for call in calls:
+        call()
+        assert "None" not in matplotlib.pyplot.gcf().axes[0].get_title()
+        matplotlib.pyplot.close("all")
+
+
+def test_given_title_is_displayed(sample_df):
+    for call in (
+        lambda: scatter_plot("全国成長効果", "産業構成効果", sample_df, title="大阪府"),
+        lambda: bar_plot("全国成長効果", sample_df, title="大阪府"),
+        lambda: box_plot("全国成長効果", sample_df, title="大阪府"),
+    ):
+        call()
+        assert matplotlib.pyplot.gcf().axes[0].get_title() == "大阪府"
+        matplotlib.pyplot.close("all")
+
+
+def test_box_plot_defaults(sample_df):
+    """title と text_col の既定値が None であることの確認"""
+    import inspect
+    p = inspect.signature(box_plot).parameters
+    assert p["title"].default is None
+    assert p["text_col"].default is None
+
+
+def test_box_plot_no_labels_without_text_col(sample_df):
+    """text_col を省略すると名前が表示されないことの確認"""
+    df = sample_df.copy()
+    df.loc[0, "全国成長効果"] = 1000.0          # 外れ値をつくる
+    box_plot("全国成長効果", df)
+    ax = matplotlib.pyplot.gcf().axes[0]
+    assert len(ax.texts) == 0
+    assert ax.get_title() == ""                 # None と表示されない
+    matplotlib.pyplot.close("all")
+
+
+def test_box_plot_labels_with_text_col(sample_df):
+    """text_col を指定すると外れ値に名前がつくことの確認"""
+    df = sample_df.copy()
+    df.loc[0, "全国成長効果"] = 1000.0
+    box_plot("全国成長効果", df, text_col="産業")
+    ax = matplotlib.pyplot.gcf().axes[0]
+    assert "産業1" in [t.get_text() for t in ax.texts]
+    matplotlib.pyplot.close("all")
+
+
+def test_box_plot_title(sample_df):
+    box_plot("全国成長効果", sample_df, title="大阪府")
+    assert matplotlib.pyplot.gcf().axes[0].get_title() == "大阪府"
+    matplotlib.pyplot.close("all")
+
+
 def test_box_plot_xlog_runs(sample_df):
     df = sample_df.copy()
     df["全国成長効果"] = df["全国成長効果"].abs() + 1
@@ -117,7 +184,8 @@ def test_regression_robust_changes_se_not_coefficients(sample_df):
 
     assert np.allclose(plain.params.to_numpy(), rob.params.to_numpy())
     assert not np.allclose(plain.bse.to_numpy(), rob.bse.to_numpy())
-    assert "HC3" in repr(rob)
+    assert "不均一分散頑健(HC3)" in repr(rob)
+    assert "非頑健" in repr(plain)
 
 
 def test_regression_multiple_x(sample_df):
@@ -158,6 +226,23 @@ def test_footnote_escaped_only_in_html(sample_df):
     assert "p<0.01" in repr(res)
     assert "&lt;" not in repr(res)
     assert "p&lt;0.01" in res._repr_html_()
+
+
+def test_no_scientific_notation_in_display(sample_df):
+    """桁の大きな値でも指数表記にならないことの確認"""
+    df = sample_df.copy()
+    df["産業構成効果"] = df["産業構成効果"] * 1_000_000   # 桁を大きくする
+    res = regression("全国成長効果", "産業構成効果", df)
+
+    assert "e+" not in repr(res)
+    assert "e+" not in res._repr_html_()
+
+
+def test_table_stays_numeric(sample_df):
+    """表示を整えても表の列が数値型のままであることの確認"""
+    res = regression("全国成長効果", "産業構成効果", sample_df)
+    width = res.table["信頼区間上限"] - res.table["信頼区間下限"]
+    assert (width > 0).all()
 
 
 def test_result_forwards_attributes(sample_df):
