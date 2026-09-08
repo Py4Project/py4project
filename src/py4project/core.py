@@ -55,51 +55,67 @@ def _check_numeric(data, col, arg_name):
             'データに「-」「※」「秘匿」などの記号が混じっている可能性があります。'))
 
 
-def _check_missing(data, col, arg_name):
-    """指定された列に欠損値がないかを確認する（内部用）"""
-    n_missing = data[col].isna().sum()
-    if n_missing > 0:
+def _check_sample_size(data, n_x=1):
+    """説明変数の数に対して標本の大きさが足りているかを確認する（内部用）
+
+    定数項と説明変数の分を推定したうえで、誤差を評価する余地
+    （自由度1以上）が残る行数を必要とする。"""
+    n_need = n_x + 2
+    if len(data) < n_need:
         raise ValueError(_err(
-            f'列「{col}」に欠けている値（欠損値）が{n_missing}個あります。',
-            f'引数 {arg_name} に指定された列「{col}」に欠損値が含まれているため、'
-            '計算結果がすべて nan（数値でない）になってしまいます。',
-            'df = df.dropna(subset=["' + str(col) + '"]) のように'
-            '欠損値のある行を除いてから、もう一度実行してください。'))
+            f'データが{len(data)}行しかなく、回帰分析ができません。',
+            f'説明変数が{n_x}個の回帰分析には、少なくとも{n_need}行のデータが必要です。',
+            '説明変数を減らすか、データの絞り込み条件を見直してください。'
+            '（欠損値のある行は計算から除かれるため、'
+            '見た目の行数より少なくなることがあります）'))
 
 
-def _check_sample_size(data, n_min=3):
-    """回帰分析に必要な標本の大きさがあるかを確認する（内部用）"""
-    if len(data) < n_min:
+def _check_duplicate_x(x):
+    """説明変数に同じ列が重複していないかを確認する（内部用）"""
+    dup = sorted({col for col in x if x.count(col) > 1})
+    if dup:
         raise ValueError(_err(
-            f'データの行数が{len(data)}行しかなく、回帰分析ができません。',
-            f'回帰分析には最低でも{n_min}行のデータが必要です。',
-            'データの絞り込み条件が厳しすぎないか確認してください。'))
+            f'説明変数に同じ列が重複しています：{"、".join(dup)}',
+            '同じ列を2回入れても新しい情報は増えず、計算結果が定まりません。',
+            'x に指定する列名が重複していないか確認してください。'))
 
 
-def _check_positive(data, col, arg_name):
-    """対数をとる列に0以下の値がないかを確認する（内部用）"""
+def _check_x_not_y(x, y):
+    """被説明変数が説明変数に含まれていないかを確認する（内部用）"""
+    if y in x:
+        raise ValueError(_err(
+            f'列「{y}」が x と y の両方に指定されています。',
+            '同じ変数で自分自身を説明することはできません。',
+            'x と y には別の列を指定してください。'))
+
+
+def _dropna_for_plot(data, cols):
+    """作図に使う列の欠損値を除く（内部用）
+
+    regression と同じように、欠損値のある行は計算・作図から除く。
+    除いた場合は、黙って減らさずに件数を知らせる。"""
+    n_before = len(data)
+    data = data.dropna(subset=list(cols))
+    n_dropped = n_before - len(data)
+    if n_dropped > 0:
+        print(f'※ 欠損値のため {n_dropped} 行を除いて作図しました。')
+    return data
+
+
+def _check_positive(data, col, arg_name, options='xlog'):
+    """対数をとる列に0以下の値がないかを確認する（内部用）
+
+    options には、その関数が実際に持っている対数化オプション名を渡す。
+    box_plot には xlog しかないため、ylog や xylog を案内しないようにする。"""
     n_bad = (data[col] <= 0).sum()
     if n_bad > 0:
         raise ValueError(_err(
             f'列「{col}」に0以下の値が{n_bad}個あるため、対数をとれません。',
             '常用対数（log10）は、0や負の数に対しては定義されていません。',
-            '対数化のオプション（xlog / ylog / xylog）をFalseに戻すか、'
+            f'対数化のオプション（{options}）をFalseに戻すか、'
             '0以下の値を含む行を除いてから実行してください。'
             '（このまま計算すると、エラーにならないまま -inf や nan が'
             '混じった誤ったグラフになります）'))
-
-
-def _check_text_col(data, text_col, func_name):
-    """text=True のときに text_col が使えるかを確認する（内部用）"""
-    if text_col is None:
-        columns = '、'.join(str(c) for c in data.columns)
-        raise ValueError(_err(
-            'text=True にするときは text_col の指定が必要です。',
-            '点の横にどの列の名前を表示すればよいか分かりません。',
-            f'{func_name}(..., text=True, text_col="産業") のように、'
-            '表示したい名前が入っている列名を指定してください。\n'
-            f'        使える列名 → {columns}'))
-    _check_column(data, text_col, 'text_col')
 
 
 def _label(value):
@@ -156,7 +172,11 @@ class RegressionResult:
 
     Colab や Jupyter のセルの最後に置くと、結果表として表示される。
     statsmodels の結果オブジェクトが持つ属性（params、rsquared など）も
-    そのまま使うことができ、元のオブジェクトは .result で取り出せる。
+    そのまま使うことができる。
+
+    公開している属性
+      .table  : 係数の表（DataFrame）。列は数値のままなので計算にも使える。
+      .result : 元の statsmodels の結果オブジェクト。
     """
 
     def __init__(self, result, header, table, footnote=''):
@@ -220,14 +240,16 @@ def regression(x, y, data, robust=False, alpha=0.05, stars=True):
     引数
     ----
     x : 文字列 または 文字列のリスト
-        説明変数（横軸にあたる変数）の列名。
+        説明変数（yを説明するために使う変数）の列名。
         リストで複数指定すると重回帰分析になります。
+        同じ列を重ねて指定したり、yと同じ列を指定したりはできません。
         例： x='特化係数'
         例： x=['特化係数', '事業所数']
     y : 文字列
-        被説明変数（縦軸にあたる変数）の列名。
+        被説明変数（説明したい変数）の列名。
     data : DataFrame
         xとyの列を含むデータフレーム。
+        xまたはyが欠けている行は、計算から自動的に除かれます。
     robust : True または False
         Falseなら通常の標準誤差（表には「非頑健」と表示）、
         Trueなら不均一分散に強い標準誤差（表には「不均一分散頑健(HC3)」と表示）
@@ -247,12 +269,23 @@ def regression(x, y, data, robust=False, alpha=0.05, stars=True):
 
     表示される内容
     --------------
-    決定係数 R²  : xがyの変動をどれくらい説明できているかを示す0〜1の値。
-                   1に近いほどよく説明できている。
-    推定値       : 推定された係数。
-    p値          : その係数が0であると考えたときに、
-                   これほどの値が偶然得られる確率。小さいほど0とは考えにくい。
-    信頼区間     : 係数の値がこの範囲に入ると考えられる区間。
+    サンプルの大きさ       : 計算に使った行数。
+    欠損値のため除外       : 欠けている値があって除いた行数（あった場合のみ）。
+    決定係数 R²            : xがyの変動をどれくらい説明できているかを示す0〜1の値。
+                             1に近いほどよく説明できている。
+    自由度調整済み決定係数 : 説明変数の数が増えた分を割り引いた決定係数。
+                             説明変数の数が違うモデルを見比べるときに使う。
+    標準誤差の種類         : robust の設定に応じて「非頑健」または
+                             「不均一分散頑健(HC3)」と表示される。
+    信頼区間の水準         : alpha の設定に応じた水準（初期値は95％）。
+
+    表の各列
+    --------
+    推定値   : 推定された係数。
+    p値      : その係数が0であると考えたときに、
+               これほどの値が偶然得られる確率。小さいほど0とは考えにくい。
+    信頼区間 : 係数の値がこの範囲に入ると考えられる区間。
+    有意性   : p値の小ささに応じた星印（stars=True のときだけ表示）。
 
     使用例
     ------
@@ -273,16 +306,21 @@ def regression(x, y, data, robust=False, alpha=0.05, stars=True):
         x = [x]
     x = list(x)
 
+    _check_duplicate_x(x)
+    _check_x_not_y(x, y)
+
     _check_column(data, y, 'y')
     _check_numeric(data, y, 'y')
     for col in x:
         _check_column(data, col, 'x')
         _check_numeric(data, col, 'x')
-    _check_sample_size(data)
 
     # 使用する列だけ取り出し、欠損値のある行を除く
     df = data[[y] + x].dropna()
     n_dropped = len(data) - len(df)
+
+    # 行数の確認は、欠損値を除いたあとの行数でおこなう
+    _check_sample_size(df, len(x))
 
     Y = df[y]
     X = sm.add_constant(df[x], has_constant='add')   # 定数項（切片）を必ず追加
@@ -320,7 +358,7 @@ def regression(x, y, data, robust=False, alpha=0.05, stars=True):
 
 
 def regression_plot(x=None, y=None, data=None, title=None, xlabel=None, ylabel=None,
-                    line=True, text=False, text_col=None, robust=False, *, ols_res=None):
+                    line=True, text_col=None, robust=False, *, ols_res=None):
     """散布図に回帰直線を重ねて表示する。
 
     引数
@@ -331,44 +369,67 @@ def regression_plot(x=None, y=None, data=None, title=None, xlabel=None, ylabel=N
         縦軸にする変数（被説明変数）の列名。
     data : DataFrame
         xとyの列を含むデータフレーム。
+        xまたはyが欠けている行は、作図と計算から自動的に除かれます。
     title : 文字列
-        グラフの上に表示するタイトル。省略すると推定式だけが表示されます。
+        グラフの上に表示するタイトル。
+        省略した場合、line=True なら推定式だけが、
+        line=False ならタイトルなしになります。
     xlabel : 文字列
         横軸のラベル。省略するとxの列名がそのまま使われます。
     ylabel : 文字列
         縦軸のラベル。省略するとyの列名がそのまま使われます。
     line : True または False
         Trueで回帰直線を引き、推定式をタイトルに表示します。
-    text : True または False
-        Trueで各点の横に名前を表示します。
-        Trueにするときは text_col の指定が必要です。
     text_col : 文字列
-        点の横に表示する名前が入っている列名。
+        各点の横に表示する名前が入っている列名。
+        省略すると名前は表示されません。
         例： text_col='産業'、text_col='都道府県'
         名前は先頭6文字までが表示されます。
     robust : True または False
         Falseなら通常の標準誤差、Trueなら不均一分散に強い標準誤差（HC3）
         を使います。回帰直線そのものはどちらでも変わりません。
     ols_res : regression の結果（キーワード指定のみ）
-        regression で計算した結果を渡すと、その結果をそのまま使って
+        regression で計算した結果を渡すと、計算し直さずにその結果で
         図を描きます。この場合 x、y、data の指定は不要です。
+        text_col と robust は一緒に使えません。
+        robust を変えたい場合は regression の側で指定してください。
 
     使用例
     ------
     >>> regression_plot('特化係数', '地域固有効果', df, title='大阪府')
-    >>> regression_plot('特化係数', '地域固有効果', df, text=True, text_col='産業')
+    >>> regression_plot('特化係数', '地域固有効果', df, text_col='産業')
     >>> res = regression('特化係数', '地域固有効果', df)
     >>> regression_plot(ols_res=res)
 
     注意点
     ------
-    ols_res を渡す場合、回帰分析に使われた変数が1つのときだけ図を描けます。
+    ols_res を渡す場合、説明変数が1つのときだけ図を描けます。
     重回帰の結果は横軸を1つに決められないため、図にできません。
+
+    欠損値のある行を除いた結果、データが3行に満たない場合はエラーになります。
     """
     if ols_res is not None:
         # ---- regression の結果をそのまま使う ----
+        # 使えない組み合わせを先に弾く
+        if text_col is not None:
+            raise ValueError(_err(
+                'ols_res と text_col は一緒に使えません。',
+                '回帰分析の結果には、点の横に表示する名前が入っていません。',
+                'x、y、data を直接渡してください。'))
+        if robust:
+            raise ValueError(_err(
+                'ols_res と robust は一緒に使えません。',
+                '標準誤差の種類は、regression を実行した時点で決まっています。',
+                'regression(..., robust=True) の結果を渡してください。'))
+
         result = _unwrap(ols_res)
         exog_names = list(result.model.exog_names)
+
+        if 'const' not in exog_names:
+            raise ValueError(_err(
+                '定数項のない回帰分析の結果は図にできません。',
+                '切片が求まらないため、直線を引くことができません。',
+                'regression で計算した結果を渡してください。'))
 
         if len(exog_names) != 2:
             raise ValueError(_err(
@@ -380,7 +441,7 @@ def regression_plot(x=None, y=None, data=None, title=None, xlabel=None, ylabel=N
                 '図にしたい2つの変数を指定してください。'))
 
         # 定数項ではないほうの列を横軸に使う
-        const_pos = exog_names.index('const') if 'const' in exog_names else 0
+        const_pos = exog_names.index('const')
         x_pos = 1 - const_pos
 
         _y = pd.Series(np.asarray(result.model.endog))
@@ -392,29 +453,23 @@ def regression_plot(x=None, y=None, data=None, title=None, xlabel=None, ylabel=N
         intercept = float(result.params.iloc[const_pos])
         slope = float(result.params.iloc[x_pos])
 
-        if text:
-            raise ValueError(_err(
-                'ols_res を渡した場合は text=True を使えません。',
-                '結果のオブジェクトには、点の横に表示する名前が含まれていません。',
-                'regression_plot(x=..., y=..., data=..., text=True, text_col="産業") '
-                'のように、データフレームを直接渡してください。'))
-
         plot_data = None
 
     else:
         # ---- x、y、data から計算する ----
         _check_dataframe(data)
+        _check_x_not_y([x], y)
         _check_column(data, x, 'x')
         _check_column(data, y, 'y')
         _check_numeric(data, x, 'x')
         _check_numeric(data, y, 'y')
-        _check_missing(data, x, 'x')
-        _check_missing(data, y, 'y')
-        _check_sample_size(data)
-        if text:
-            _check_text_col(data, text_col, 'regression_plot')
+        if text_col is not None:
+            _check_column(data, text_col, 'text_col')
 
-        plot_data = data.copy()
+        # regression と同じように、欠損値のある行を除いてから推定する
+        plot_data = _dropna_for_plot(data.copy(), [x, y])
+        _check_sample_size(plot_data, 1)
+
         _x = plot_data[x]
         _y = plot_data[y]
         y_name, x_name = y, x
@@ -432,7 +487,7 @@ def regression_plot(x=None, y=None, data=None, title=None, xlabel=None, ylabel=N
     fig, ax = plt.subplots()
     ax.scatter(_x, _y, s=60, color='steelblue', zorder=3)
 
-    if text and plot_data is not None:
+    if text_col is not None and plot_data is not None:
         for _, row in plot_data.iterrows():
             ax.annotate(_label(row[text_col]), (row[x], row[y]), fontsize=8, alpha=0.85)
 
@@ -465,7 +520,7 @@ def regression_plot(x=None, y=None, data=None, title=None, xlabel=None, ylabel=N
 
 
 def scatter_plot(x, y, data, title=None, xlabel=None, ylabel=None,
-                 line=True, text=False, text_col=None,
+                 line=True, text_col=None,
                  xlog=False, ylog=False, xylog=False):
     """散布図にトレンド線を重ねて表示する。
 
@@ -481,6 +536,7 @@ def scatter_plot(x, y, data, title=None, xlabel=None, ylabel=None,
         縦軸にする変数の列名。
     data : DataFrame
         xとyの列を含むデータフレーム。
+        xまたはyが欠けている行は、作図と計算から自動的に除かれます。
     title : 文字列
         グラフの上に表示するタイトル。省略するとタイトルなしになります。
     xlabel : 文字列
@@ -489,11 +545,9 @@ def scatter_plot(x, y, data, title=None, xlabel=None, ylabel=None,
         縦軸のラベル。省略するとyの列名がそのまま使われます。
     line : True または False
         Trueでトレンド線（当てはめた直線）を引きます。
-    text : True または False
-        Trueで各点の横に名前を表示します。
-        Trueにするときは text_col の指定が必要です。
     text_col : 文字列
-        点の横に表示する名前が入っている列名。
+        各点の横に表示する名前が入っている列名。
+        省略すると名前は表示されません。
         例： text_col='産業'、text_col='都道府県'
         名前は先頭6文字までが表示されます。
     xlog : True または False
@@ -507,32 +561,36 @@ def scatter_plot(x, y, data, title=None, xlabel=None, ylabel=None,
     ------
     >>> scatter_plot('従業者数', '売上高', df)
     >>> scatter_plot('従業者数', '売上高', df, xylog=True)
-    >>> scatter_plot('従業者数', '売上高', df, text=True, text_col='産業')
+    >>> scatter_plot('従業者数', '売上高', df, text_col='産業')
 
     注意点
     ------
     対数をとる列に0以下の値が含まれているとエラーになります。
+    トレンド線を引く場合（line=True）、欠損値を除いたあとのデータが
+    3行に満たないとエラーになります。
     """
     _check_dataframe(data)
     _check_column(data, x, 'x')
     _check_column(data, y, 'y')
     _check_numeric(data, x, 'x')
     _check_numeric(data, y, 'y')
-    _check_missing(data, x, 'x')
-    _check_missing(data, y, 'y')
-    if text:
-        _check_text_col(data, text_col, 'scatter_plot')
-    if xlog or xylog:
-        _check_positive(data, x, 'x')
-    if ylog or xylog:
-        _check_positive(data, y, 'y')
+    if text_col is not None:
+        _check_column(data, text_col, 'text_col')
 
     if xlabel is None:
         xlabel = x
     if ylabel is None:
         ylabel = y
 
-    data = data.copy()
+    # regression と同じように、欠損値のある行を除いてから作図する
+    data = _dropna_for_plot(data.copy(), [x, y])
+    if line:
+        _check_sample_size(data, 1)
+
+    if xlog or xylog:
+        _check_positive(data, x, 'x', options='xlog / xylog')
+    if ylog or xylog:
+        _check_positive(data, y, 'y', options='ylog / xylog')
 
     if xlog or xylog:
         data[x + '_log'] = np.log10(data[x])
@@ -552,7 +610,7 @@ def scatter_plot(x, y, data, title=None, xlabel=None, ylabel=None,
     fig, ax = plt.subplots()
     ax.scatter(_x, _y, s=60, color='steelblue', zorder=3)
 
-    if text:
+    if text_col is not None:
         for _, row in data.iterrows():
             ax.annotate(_label(row[text_col]), (row[x_plot], row[y_plot]),
                         fontsize=8, alpha=0.85)
@@ -761,6 +819,7 @@ def box_plot(x, data, title=None, text_col=None, xlabel=None, xlog=False):
     注意点
     ------
     xlog=True にする場合、対象の列に0以下の値が含まれているとエラーになります。
+    box_plot に ylog や xylog はありません。
     """
     _check_dataframe(data)
 
@@ -798,7 +857,7 @@ def box_plot(x, data, title=None, text_col=None, xlabel=None, xlog=False):
 
     if xlog:
         for col in x:
-            _check_positive(data, col, 'x')
+            _check_positive(data, col, 'x', options='xlog')
 
     data = data.copy()
 

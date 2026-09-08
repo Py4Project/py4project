@@ -41,8 +41,7 @@ def test_regression_plot_runs(sample_df):
 
 
 def test_regression_plot_with_text(sample_df):
-    regression_plot("全国成長効果", "産業構成効果", sample_df,
-                    text=True, text_col="産業")
+    regression_plot("全国成長効果", "産業構成効果", sample_df, text_col="産業")
 
 
 def test_regression_plot_from_result(sample_df):
@@ -308,18 +307,30 @@ def test_plot_rejects_multiple_regression_result(sample_df):
 # 引数の既定値（A-5, A-6）
 # ============================================================
 
-def test_text_defaults_to_false(sample_df):
-    """A-5：text の既定値が両関数で False であることの確認"""
+def test_no_text_parameter():
+    """text 引数が廃止され、text_col に統合されていることの確認"""
     import inspect
-    for fn in (regression_plot, scatter_plot):
-        assert inspect.signature(fn).parameters["text"].default is False
+    for fn in (regression_plot, scatter_plot, box_plot):
+        assert "text" not in inspect.signature(fn).parameters, fn.__name__
 
 
-def test_text_col_defaults_to_none(sample_df):
-    """A-6：text_col の既定値が両関数で None であることの確認"""
+def test_text_col_defaults_to_none():
+    """text_col の既定値が3関数すべてで None であることの確認"""
     import inspect
+    for fn in (regression_plot, scatter_plot, box_plot):
+        assert inspect.signature(fn).parameters["text_col"].default is None, fn.__name__
+
+
+def test_labels_shown_only_when_text_col_given(sample_df):
+    """text_col の指定有無で名前の表示が切り替わることの確認"""
     for fn in (regression_plot, scatter_plot):
-        assert inspect.signature(fn).parameters["text_col"].default is None
+        fn("全国成長効果", "産業構成効果", sample_df)
+        assert len(matplotlib.pyplot.gcf().axes[0].texts) == 0, fn.__name__
+        matplotlib.pyplot.close("all")
+
+        fn("全国成長効果", "産業構成効果", sample_df, text_col="産業")
+        assert len(matplotlib.pyplot.gcf().axes[0].texts) == len(sample_df), fn.__name__
+        matplotlib.pyplot.close("all")
 
 
 def test_ols_res_is_keyword_only():
@@ -355,10 +366,107 @@ def test_error_non_numeric_column(sample_df):
         regression("全国成長効果", "区分", sample_df)
 
 
-def test_error_text_without_text_col(sample_df):
+def test_error_text_col_not_found(sample_df):
+    for fn in (regression_plot, scatter_plot, box_plot):
+        with pytest.raises(ValueError, match="見つかりません"):
+            if fn is box_plot:
+                fn("全国成長効果", sample_df, text_col="存在しない列")
+            else:
+                fn("全国成長効果", "産業構成効果", sample_df, text_col="存在しない列")
+
+
+def test_error_ols_res_with_text_col(sample_df):
+    res = regression("全国成長効果", "産業構成効果", sample_df)
+    with pytest.raises(ValueError, match="text_col は一緒に使えません"):
+        regression_plot(ols_res=res, text_col="産業")
+
+
+def test_error_ols_res_with_robust(sample_df):
+    """⑥：ols_res と robust の同時指定はエラーになる"""
+    res = regression("全国成長効果", "産業構成効果", sample_df)
+    with pytest.raises(ValueError, match="robust は一緒に使えません"):
+        regression_plot(ols_res=res, robust=True)
+
+
+def test_error_ols_res_without_constant(sample_df):
+    """⑦：定数項のない結果は「重回帰」ではなく専用のメッセージになる"""
+    import statsmodels.api as _sm
+    res = _sm.OLS(sample_df["産業構成効果"], sample_df[["全国成長効果"]]).fit()
+    with pytest.raises(ValueError, match="定数項のない"):
+        regression_plot(ols_res=res)
+
+
+# ============================================================
+# 欠損値・標本の大きさ・説明変数の指定（①〜⑤）
+# ============================================================
+
+def test_missing_values_dropped_consistently(sample_df, capsys):
+    """①：3関数すべてが欠損行を除いて動作する"""
+    df = sample_df.copy()
+    df.loc[0, "全国成長効果"] = np.nan
+
+    res = regression("全国成長効果", "産業構成効果", df)
+    assert int(res.nobs) == len(sample_df) - 1
+
     for fn in (regression_plot, scatter_plot):
-        with pytest.raises(ValueError, match="text_col"):
-            fn("全国成長効果", "産業構成効果", sample_df, text=True)
+        fn("全国成長効果", "産業構成効果", df)
+        assert "欠損値のため" in capsys.readouterr().out, fn.__name__
+        matplotlib.pyplot.close("all")
+
+
+def test_sample_size_checked_after_dropna():
+    """②：行数の確認は欠損値を除いたあとでおこなう"""
+    df = pd.DataFrame({"x": [1.0, 2.0] + [np.nan] * 18,
+                       "y": [1.0, 3.0] + list(np.arange(18.0))})
+    with pytest.raises(ValueError, match="回帰分析ができません"):
+        regression("x", "y", df)
+
+
+def test_sample_size_depends_on_number_of_x():
+    """③：必要な行数が説明変数の数に応じて変わる"""
+    df = pd.DataFrame({"a": [1.0, 2.0, 3.0],
+                       "b": [2.0, 1.0, 4.0],
+                       "y": [1.0, 2.0, 3.0]})
+    # 説明変数1個なら n=3 で足りる
+    regression("a", "y", df)
+    # 説明変数2個には n=4 必要
+    with pytest.raises(ValueError, match="少なくとも4行"):
+        regression(["a", "b"], "y", df)
+
+
+def test_no_nan_pvalues_displayed(sample_df):
+    """③：自由度が確保されるため p値が nan にならない"""
+    res = regression(["全国成長効果", "地域固有効果"], "産業構成効果", sample_df)
+    assert "nan" not in repr(res)
+
+
+def test_error_duplicate_x(sample_df):
+    """④：説明変数の重複はエラー"""
+    with pytest.raises(ValueError, match="重複"):
+        regression(["全国成長効果", "全国成長効果"], "産業構成効果", sample_df)
+
+
+def test_error_x_equals_y(sample_df):
+    """⑤：x と y が同じ列ならエラー"""
+    with pytest.raises(ValueError, match="両方に指定"):
+        regression("全国成長効果", "全国成長効果", sample_df)
+    with pytest.raises(ValueError, match="両方に指定"):
+        regression_plot("全国成長効果", "全国成長効果", sample_df)
+
+
+def test_log_option_names_match_function(sample_df):
+    """⑧：対数エラーの案内が、その関数が持つオプション名だけになる"""
+    df = sample_df.copy()
+    df.loc[0, "全国成長効果"] = 0.0
+
+    with pytest.raises(ValueError) as exc:
+        box_plot("全国成長効果", df, xlog=True)
+    assert "ylog" not in str(exc.value)
+    assert "xylog" not in str(exc.value)
+
+    with pytest.raises(ValueError) as exc:
+        scatter_plot("全国成長効果", "産業構成効果", df, xlog=True)
+    assert "xylog" in str(exc.value)
 
 
 def test_error_log_non_positive(sample_df):
@@ -402,8 +510,7 @@ def test_error_example_uses_x_y_order(sample_df):
 
 
 def test_numeric_text_col_does_not_crash(sample_df):
-    regression_plot("全国成長効果", "産業構成効果", sample_df,
-                    text=True, text_col="産業コード")
+    regression_plot("全国成長効果", "産業構成効果", sample_df, text_col="産業コード")
 
 
 # ============================================================

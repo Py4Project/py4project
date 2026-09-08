@@ -1,6 +1,6 @@
-"""py4project: 「研究プロジェクト2」向けの分析・可視化ユーティリティ
+"""py4project: 授業向けの分析・可視化ユーティリティ
 
-学生・教員が pandas DataFrame から回帰分析・散布図・横バープロット・
+pandas DataFrame から回帰分析・散布図・横バープロット・
 ボックスプロットを簡単に作成するための関数群です。
 """
 
@@ -12,7 +12,7 @@ from .core import (
     box_plot,
 )
 
-__version__ = "0.2.1"
+__version__ = "0.2.2"
 
 __all__ = [
     "regression",

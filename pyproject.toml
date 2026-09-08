@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "py4project"
-version = "0.2.1"
+version = "0.2.2"
 description = "授業向けの回帰分析・散布図・バープロット・ボックスプロットのユーティリティ"
 readme = "README.md"
 requires-python = ">=3.10"
