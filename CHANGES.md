@@ -57,6 +57,8 @@
   これで公開している7つの関数すべてが収録された。
 - README の `examples/example.ipynb` へのリンクを絶対URLにした。
   PyPI の説明欄では相対リンクが機能しないため。
+- GitHub Actions を最新版に更新した（checkout@v6、setup-python@v6、
+  upload-artifact@v5、download-artifact@v6）。Node.js 20 の非推奨警告が出なくなる。
 
 ## 0.2.2（2026-09-08）
 
