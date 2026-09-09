@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "py4project"
-version = "0.2.2"
-description = "授業向けの回帰分析・散布図・バープロット・ボックスプロットのユーティリティ"
+version = "0.3.0"
+description = "授業向けの回帰分析・散布図・折れ線グラフ・バープロット・ボックスプロット・円グラフのユーティリティ"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

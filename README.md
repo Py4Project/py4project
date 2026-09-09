@@ -1,6 +1,6 @@
 # py4project
 
-授業向けの分析・可視化ユーティリティです。pandas DataFrame から回帰分析・散布図・横バープロット・ボックスプロットを簡単に作成できます。
+授業向けの分析・可視化ユーティリティです。pandas DataFrame から回帰分析・散布図・折れ線グラフ・横バープロット・ボックスプロット・円グラフを簡単に作成できます。
 
 ## インストール
 
@@ -13,8 +13,10 @@ pip install py4project
 - `regression(x, y, data, ...)` — 回帰分析（`x` にリストを渡すと重回帰）。決定係数・係数・p値・信頼区間を表にして表示し、結果オブジェクトを返します
 - `regression_plot(x, y, data, ...)` — 散布図＋回帰直線（`regression` の結果を渡すこともできます）
 - `scatter_plot(x, y, data, ...)` — 散布図＋トレンド線（対数軸オプションあり）
-- `bar_plot(x, data, ...)` — 横バープロット（複数系列・シフトシェア分解の配色に対応）
-- `box_plot(x, data, ...)` — ボックスプロット（対数化オプションあり。`text_col` を指定すると外れ値に名前を表示）
+- `bar_plot(x, data, ...)` — 横バープロット（複数系列・シフトシェア分解の配色に対応。`label_col` で縦軸の名前、`sort_by` で並び順を指定）
+- `box_plot(x, data, ...)` — ボックスプロット（対数化オプションあり。`label_col` を指定すると外れ値に名前を表示）
+- `line_plot(x, y, data, ...)` — 折れ線グラフ（`y` にリストを渡すと複数系列を重ねて表示）
+- `pie_plot(x, data, label_col, ...)` — 円グラフ（パーセント表示。`top` や `other` で小さい項目をまとめられます）
 
 ## 使用例
 
@@ -23,7 +25,6 @@ import pandas as pd
 from py4project import regression, bar_plot
 
 df = pd.DataFrame({
-    "産業コード": [1, 2, 3, 4],
     "産業": ["製造業", "卸売業", "小売業", "建設業"],
     "事業所数": [120, 80, 60, 40],
     "従業者数": [1500, 900, 700, 380],
@@ -33,14 +34,18 @@ df = pd.DataFrame({
 regression("事業所数", "従業者数", df)
 
 # 横バープロット
-bar_plot("従業者数", df, title="産業別の従業者数")
+bar_plot("従業者数", df, label_col="産業", title="産業別の従業者数")
 ```
 
-より詳しい使い方は [`examples/example.ipynb`](examples/example.ipynb) を参照してください。
+より詳しい使い方は [`examples/example.ipynb`](https://github.com/Py4Project/py4project/blob/main/examples/example.ipynb) を参照してください。
 
 ## 依存パッケージ
 
 `numpy`, `pandas`, `statsmodels`, `matplotlib>=3.9`, `japanize_matplotlib_jlite`（日本語フォントを自動設定します）
+
+## 変更履歴
+
+[CHANGES.md](https://github.com/Py4Project/py4project/blob/main/CHANGES.md) を参照してください。
 
 ## ライセンス
 

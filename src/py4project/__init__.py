@@ -1,7 +1,7 @@
 """py4project: 授業向けの分析・可視化ユーティリティ
 
-pandas DataFrame から回帰分析・散布図・横バープロット・
-ボックスプロットを簡単に作成するための関数群です。
+pandas DataFrame から回帰分析・散布図・折れ線グラフ・横バープロット・
+ボックスプロット・円グラフを簡単に作成するための関数群です。
 """
 
 from .core import (
@@ -10,9 +10,11 @@ from .core import (
     scatter_plot,
     bar_plot,
     box_plot,
+    line_plot,
+    pie_plot,
 )
 
-__version__ = "0.2.2"
+__version__ = "0.3.0"
 
 __all__ = [
     "regression",
@@ -20,4 +22,6 @@ __all__ = [
     "scatter_plot",
     "bar_plot",
     "box_plot",
+    "line_plot",
+    "pie_plot",
 ]
