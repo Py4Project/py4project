@@ -13,7 +13,7 @@ pip install py4project
 - `regression(x, y, data, ...)` — 回帰分析（`x` にリストを渡すと重回帰）。決定係数・係数・p値・信頼区間を表にして表示し、結果オブジェクトを返します
 - `regression_plot(x, y, data, ...)` — 散布図＋回帰直線（`regression` の結果を渡すこともできます）
 - `scatter_plot(x, y, data, ...)` — 散布図＋トレンド線（対数軸オプションあり）
-- `bar_plot(x, data, ...)` — 横バープロット（複数系列・シフトシェア分解の配色に対応。`label_col` で縦軸の名前、`sort_by` で並び順を指定）
+- `bar_plot(x, data, ...)` — 横バープロット（複数系列・シフトシェア分解の配色に対応。`label_col` で縦軸の名前、`sort_by` で並び順、`legend` で凡例の名前を指定）
 - `box_plot(x, data, ...)` — ボックスプロット（対数化オプションあり。`label_col` を指定すると外れ値に名前を表示）
 - `line_plot(x, y, data, ...)` — 折れ線グラフ（`y` にリストを渡すと複数系列を重ねて表示）
 - `pie_plot(x, data, label_col, ...)` — 円グラフ（パーセント表示。`top` や `other` で小さい項目をまとめられます）

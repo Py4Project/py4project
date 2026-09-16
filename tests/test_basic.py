@@ -1,3 +1,5 @@
+import re
+
 import matplotlib
 matplotlib.use("Agg")
 
@@ -1041,3 +1043,139 @@ def test_pie_plot_single_category():
             if t.get_text().endswith("%")]
     assert pcts == ["100.0%"]
     matplotlib.pyplot.close("all")
+
+
+# ============================================================
+# bar_plot の legend（line_plot と同じ仕様）
+# ============================================================
+
+@pytest.fixture
+def two_series_df():
+    return pd.DataFrame({"産業": ["製造業", "卸売業", "小売業"],
+                         "年": [2016, 2017, 2018],
+                         "w2016": [100.0, 200.0, 150.0],
+                         "w2021": [110.0, 190.0, 170.0]})
+
+
+def _legend_texts():
+    return [t.get_text()
+            for t in matplotlib.pyplot.gcf().axes[0].get_legend().get_texts()]
+
+
+def test_bar_plot_legend_renames_series(two_series_df):
+    bar_plot(x=["w2016", "w2021"], data=two_series_df, label_col="産業",
+             legend=["2016年", "2021年"])
+    assert _legend_texts() == ["2016年", "2021年"]
+    matplotlib.pyplot.close("all")
+
+
+def test_bar_plot_legend_defaults_to_column_names(two_series_df):
+    bar_plot(["w2016", "w2021"], two_series_df, label_col="産業")
+    assert _legend_texts() == ["w2016", "w2021"]
+    matplotlib.pyplot.close("all")
+
+
+def test_bar_plot_legend_for_single_series(two_series_df):
+    """系列が1つでも legend を指定すれば凡例を出す"""
+    bar_plot("w2016", two_series_df, label_col="産業", legend="2016年")
+    assert _legend_texts() == ["2016年"]
+    matplotlib.pyplot.close("all")
+
+
+def test_bar_plot_without_legend_single_series_has_no_legend(two_series_df):
+    bar_plot("w2016", two_series_df, label_col="産業")
+    assert matplotlib.pyplot.gcf().axes[0].get_legend() is None
+    matplotlib.pyplot.close("all")
+
+
+def test_bar_plot_legend_length_mismatch(two_series_df):
+    with pytest.raises(ValueError, match="legend の数と x の数"):
+        bar_plot(["w2016", "w2021"], two_series_df, legend=["一つだけ"])
+
+
+def test_bar_plot_legend_rejects_bool(two_series_df):
+    with pytest.raises(TypeError, match="True や False"):
+        bar_plot(["w2016", "w2021"], two_series_df, legend=True)
+
+
+def test_legend_behaves_the_same_in_bar_and_line(two_series_df):
+    """bar_plot と line_plot で legend の仕様が揃っている"""
+    import inspect
+    for fn in (bar_plot, line_plot):
+        assert inspect.signature(fn).parameters["legend"].default is None, fn.__name__
+
+    bar_plot(["w2016", "w2021"], two_series_df, label_col="産業",
+             legend=["2016年", "2021年"])
+    bar_labels = _legend_texts()
+    matplotlib.pyplot.close("all")
+
+    line_plot("年", ["w2016", "w2021"], two_series_df,
+              legend=["2016年", "2021年"])
+    line_labels = _legend_texts()
+    matplotlib.pyplot.close("all")
+
+    assert bar_labels == line_labels == ["2016年", "2021年"]
+
+
+def test_bar_plot_legend_does_not_change_colors(two_series_df):
+    """legend は名前だけを変え、配色（_COLOR_MAP）には影響しない"""
+    df = two_series_df.rename(columns={"w2016": "全国成長効果",
+                                       "w2021": "地域固有効果"})
+    bar_plot(["全国成長効果", "地域固有効果"], df, label_col="産業",
+             legend=["効果A", "効果B"])
+    ax = matplotlib.pyplot.gcf().axes[0]
+    colors = [c.patches[0].get_facecolor() for c in ax.containers]
+    import matplotlib.colors as mcolors
+    assert mcolors.to_hex(colors[0]).upper() == "#5B7C99"
+    assert mcolors.to_hex(colors[1]).upper() == "#1F7A5C"
+    assert _legend_texts() == ["効果A", "効果B"]
+    matplotlib.pyplot.close("all")
+
+
+# ============================================================
+# 推定式の符号
+# ============================================================
+
+def _fit_title(slope_sign, intercept_shift=0.0):
+    rng = np.random.default_rng(0)
+    xv = rng.uniform(10, 100, 20)
+    df = pd.DataFrame({"x": xv,
+                       "y": slope_sign * xv + intercept_shift + rng.normal(0, 5, 20)})
+    regression_plot("x", "y", df)
+    title = matplotlib.pyplot.gcf().axes[0].get_title()
+    matplotlib.pyplot.close("all")
+    return title
+
+
+def test_equation_has_no_double_sign():
+    """傾きが負のとき「+ -1.50」と符号が重ならない"""
+    title = _fit_title(-1.5)
+    assert "+ -" not in title
+    assert "＋-" not in title
+
+
+def test_equation_keeps_plus_for_positive_slope():
+    """傾きが正のときは従来どおり「+ 1.50」と表示する"""
+    title = _fit_title(1.5)
+    assert "+ " in title
+
+
+def test_equation_sign_for_all_combinations():
+    for slope_sign in (1.5, -1.5):
+        for shift in (0.0, -200.0):
+            title = _fit_title(slope_sign, shift)
+            assert "+ -" not in title, title
+            # 「× x」の直前が符号付きの数値になっていること
+            assert re.search(r"[+-]\s?\d+\.\d{4} × x$", title), title
+
+
+def test_equation_sign_via_ols_res():
+    """ols_res を渡した経路でも符号が重ならない"""
+    rng = np.random.default_rng(0)
+    xv = rng.uniform(10, 100, 20)
+    df = pd.DataFrame({"x": xv, "y": -1.5 * xv + rng.normal(0, 5, 20)})
+    res = regression("x", "y", df)
+    regression_plot(ols_res=res)
+    title = matplotlib.pyplot.gcf().axes[0].get_title()
+    matplotlib.pyplot.close("all")
+    assert "+ -" not in title

@@ -31,6 +31,25 @@ jobs:
       - name: メタデータを検査
         run: python -m twine check dist/*
 
+      # タグが古いコミットを指していると、意図しないバージョンが
+      # ビルドされたまま PyPI に送られ、原因の分かりにくい
+      # 「400 File already exists」で失敗する。ここで先に止める。
+      - name: タグとバージョンが一致するか確認
+        if: github.event_name == 'release'
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          VERSION="${TAG#v}"
+          echo "タグ: $TAG / 期待するバージョン: $VERSION"
+          echo "ビルドされた配布物:"
+          ls -1 dist/
+          if [ ! -f "dist/py4project-${VERSION}.tar.gz" ]; then
+            echo "::error::タグ $TAG とビルドされたバージョンが一致しません。"
+            echo "::error::タグが古いコミットを指している可能性があります。"
+            echo "::error::pyproject.toml のバージョンを上げてから、タグを付け直してください。"
+            exit 1
+          fi
+          echo "一致を確認しました。"
+
       - name: 配布物を成果物として保存
         uses: actions/upload-artifact@v5
         with:

@@ -137,6 +137,38 @@ def _check_positive(data, col, arg_name, options='xlog'):
             '混じった誤ったグラフになります）'))
 
 
+def _resolve_legend(columns, legend, func_name, arg_name):
+    """凡例に使う名前を決める（内部用）
+
+    legend が省略されていれば列名をそのまま使う。
+    指定されていれば、数が合っているかを確かめてから使う。"""
+    if legend is None:
+        return list(columns)
+
+    if isinstance(legend, bool):
+        raise TypeError(_err(
+            f'{func_name} の legend には True や False を指定できません。',
+            f'{func_name} の legend は、凡例に表示する名前のリストです。'
+            '（pie_plot の legend は表示するかどうかの True / False で、'
+            '意味が異なります）',
+            '系列が複数あれば凡例は自動的に表示されます。'
+            "名前を変えたいときだけ legend=['2016年', '2021年'] "
+            'のように指定してください。'))
+
+    if isinstance(legend, str):
+        legend = [legend]
+    legend = list(legend)
+
+    if len(legend) != len(columns):
+        raise ValueError(_err(
+            f'legend の数と {arg_name} の数が合っていません。',
+            f'{arg_name} には{len(columns)}個の列名が指定されましたが、'
+            f'legend には{len(legend)}個の名前が指定されています。',
+            'legend は省略できます。指定する場合は、'
+            f'{arg_name} と同じ数の名前をリストで渡してください。'))
+    return legend
+
+
 def _label(value):
     """マーカー横に表示する文字列を安全に作る（内部用）
 
@@ -524,8 +556,10 @@ def regression_plot(x=None, y=None, data=None, title=None, xlabel=None, ylabel=N
     if title:
         title_lines.append(title)
     if line:
+        # 傾きが負のときに「+ -1.4984」と符号が重ならないようにする
+        slope_term = f'+ {slope:.4f}' if slope >= 0 else f'{slope:.4f}'
         title_lines.append(
-            f'推定式: {ylabel} = {intercept:.4f} + {slope:.4f} × {xlabel}')
+            f'推定式: {ylabel} = {intercept:.4f} {slope_term} × {xlabel}')
     if title_lines:
         ax.set_title('\n'.join(title_lines))
 
@@ -672,7 +706,7 @@ _COLOR_MAP = {
 
 
 def bar_plot(x, data, title=None, xlabel=None, unit=1000,
-             sort_by=None, label_col=None, ascending=None):
+             sort_by=None, label_col=None, ascending=None, legend=None):
     """横向きの棒グラフを表示する。
 
     産業ごとの値を横に並べた棒グラフを描きます。
@@ -709,6 +743,10 @@ def bar_plot(x, data, title=None, xlabel=None, unit=1000,
         Trueで昇順（小さい順）、Falseで降順（大きい順）に並べます。
         省略すると降順（値の大きい順）になります。
         sort_by を指定していないときは使われません。
+    legend : 文字列のリスト
+        凡例に表示する名前。xと同じ順番、同じ数で指定します。
+        省略すると列名がそのまま使われます。
+        例： x=['w2016', 'w2021'] に対して legend=['2016年', '2021年']
 
     使用例
     ------
@@ -717,6 +755,8 @@ def bar_plot(x, data, title=None, xlabel=None, unit=1000,
     >>> bar_plot('地域固有効果', df, label_col='産業', sort_by='地域固有効果')
     >>> bar_plot('地域固有効果', df, label_col='産業', sort_by='産業コード',
     ...          ascending=True)
+    >>> bar_plot(['w2016', 'w2021'], df, label_col='産業',
+    ...          legend=['2016年', '2021年'])
     """
     _check_dataframe(data, example='bar_plot("従業者数", df)')
 
@@ -732,6 +772,10 @@ def bar_plot(x, data, title=None, xlabel=None, unit=1000,
     for col in x_list:
         _check_column(data, col, 'x')
         _check_numeric(data, col, 'x')
+
+    # 凡例の名前を決める（数が合わない指定は早めに知らせる）
+    names = _resolve_legend(x_list, legend, 'bar_plot', 'x')
+
     if label_col is not None:
         _check_column(data, label_col, 'label_col')
 
@@ -774,11 +818,11 @@ def bar_plot(x, data, title=None, xlabel=None, unit=1000,
     y = np.arange(len(data))
     bar_height = 0.8 / n
 
-    for i, col in enumerate(x_list):
+    for i, (col, name) in enumerate(zip(x_list, names)):
         offset = (i - (n - 1) / 2) * bar_height
         color = _COLOR_MAP.get(col, plt.cm.tab10(i / max(n - 1, 1)))
         ax.barh(y + offset, data[col] / unit_map[col], height=bar_height,
-                color=color, label=col)
+                color=color, label=name)
 
     if (data[x_list] < 0).any().sum() > 0:
         ax.axvline(0, color='gray', linewidth=0.8)
@@ -793,7 +837,8 @@ def bar_plot(x, data, title=None, xlabel=None, unit=1000,
         ax.set_title(title)
     ax.invert_yaxis()
     ax.grid(axis='x', alpha=0.3)
-    if n > 1:
+    # 系列が複数あるときか、名前が指定されたときに凡例を表示する
+    if n > 1 or legend is not None:
         ax.legend()
     plt.tight_layout()
     plt.show()
@@ -984,29 +1029,7 @@ def line_plot(x, y, data, title=None, xlabel=None, ylabel=None, legend=None,
         _check_numeric(data, col, 'y')
 
     # 凡例の名前を決める（数が合わない指定は早めに知らせる）
-    if legend is None:
-        names = list(y)
-    else:
-        if isinstance(legend, bool):
-            raise TypeError(_err(
-                'line_plot の legend には True や False を指定できません。',
-                'line_plot の legend は、凡例に表示する名前のリストです。'
-                '（pie_plot の legend は表示するかどうかの True / False で、'
-                '意味が異なります）',
-                '系列が複数あれば凡例は自動的に表示されます。'
-                "名前を変えたいときだけ legend=['2016年', '2021年'] "
-                'のように指定してください。'))
-        if isinstance(legend, str):
-            legend = [legend]
-        legend = list(legend)
-        if len(legend) != len(y):
-            raise ValueError(_err(
-                'legend の数と y の数が合っていません。',
-                f'y には{len(y)}個の列名が指定されましたが、'
-                f'legend には{len(legend)}個の名前が指定されています。',
-                'legend は省略できます。指定する場合は、'
-                'y と同じ数の名前をリストで渡してください。'))
-        names = legend
+    names = _resolve_legend(y, legend, 'line_plot', 'y')
 
     if xlabel is None:
         xlabel = x
