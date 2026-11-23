@@ -18,6 +18,8 @@ pip install py4project
 - `line_plot(x, y, data, ...)` — 折れ線グラフ（`y` にリストを渡すと複数系列を重ねて表示）
 - `pie_plot(x, data, label_col, ...)` — 円グラフ（パーセント表示。`top` や `other` で小さい項目をまとめられます）
 
+作図関数はどれも `figsize=(幅, 高さ)` で図の大きさを指定できます（単位はインチ、1インチ＝2.54cm）。
+
 ## 使用例
 
 ```python

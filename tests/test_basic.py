@@ -1179,3 +1179,133 @@ def test_equation_sign_via_ols_res():
     title = matplotlib.pyplot.gcf().axes[0].get_title()
     matplotlib.pyplot.close("all")
     assert "+ -" not in title
+
+
+# ============================================================
+# figsize（0.3.2）
+# ============================================================
+
+_PLOT_FUNCS = ["regression_plot", "scatter_plot", "bar_plot",
+               "box_plot", "line_plot", "pie_plot"]
+
+
+def _size():
+    size = tuple(round(float(v), 2) for v in matplotlib.pyplot.gcf().get_size_inches())
+    matplotlib.pyplot.close("all")
+    return size
+
+
+def _draw_each(df, **kw):
+    """6つの作図関数を順に呼び、図の大きさを返す"""
+    res = regression("全国成長効果", "産業構成効果", df)
+    calls = {
+        "regression_plot": lambda: regression_plot("全国成長効果", "産業構成効果", df, **kw),
+        "regression_plot(ols_res)": lambda: regression_plot(ols_res=res, **kw),
+        "scatter_plot": lambda: scatter_plot("全国成長効果", "産業構成効果", df, **kw),
+        "bar_plot": lambda: bar_plot("全国成長効果", df, label_col="産業", **kw),
+        "box_plot": lambda: box_plot("全国成長効果", df, **kw),
+        "line_plot": lambda: line_plot("産業コード", "全国成長効果", df, **kw),
+        "pie_plot": lambda: pie_plot("全国成長効果", df, "産業", **kw),
+    }
+    out = {}
+    for name, call in calls.items():
+        call()
+        out[name] = _size()
+    return out
+
+
+def test_figsize_is_keyword_only_in_every_plot_function():
+    import inspect
+    import py4project
+    for name in _PLOT_FUNCS:
+        p = inspect.signature(getattr(py4project, name)).parameters["figsize"]
+        assert p.kind is inspect.Parameter.KEYWORD_ONLY, name
+        assert p.default is None, name
+
+
+def test_figsize_is_applied(sample_df):
+    for name, size in _draw_each(sample_df, figsize=(8, 5)).items():
+        assert size == (8.0, 5.0), name
+
+
+def test_default_sizes_are_unchanged(sample_df):
+    """figsize を省略したときの大きさは 0.3.1 と同じ（bar_plot を除く）"""
+    default = tuple(round(float(v), 2) for v in matplotlib.rcParams["figure.figsize"])
+    for name, size in _draw_each(sample_df).items():
+        if name == "bar_plot":
+            continue
+        assert size == default, name
+
+
+def test_figsize_accepts_list_and_numpy(sample_df):
+    for v in ([8, 5], np.array([8, 5]), (np.int64(8), np.float64(5.0))):
+        scatter_plot("全国成長効果", "産業構成効果", sample_df, figsize=v)
+        assert _size() == (8.0, 5.0)
+
+
+@pytest.mark.parametrize("bad, exc, message", [
+    (8, TypeError, "指定のしかた"),
+    ("8x5", TypeError, "指定のしかた"),
+    (("8", "5"), TypeError, "数を指定"),
+    ((True, 5), TypeError, "数を指定"),
+    ((8,), ValueError, "2つの数"),
+    ((8, 5, 3), ValueError, "2つの数"),
+    ((8, 5, "cm"), ValueError, "単位は指定できません"),
+    ((0, 5), ValueError, "0より大きい"),
+    ((-8, 5), ValueError, "0より大きい"),
+    ((float("inf"), 5), ValueError, "0より大きい"),
+    ((float("nan"), 5), ValueError, "0より大きい"),
+])
+def test_invalid_figsize_gives_japanese_error(sample_df, bad, exc, message):
+    with pytest.raises(exc, match=message):
+        scatter_plot("全国成長効果", "産業構成効果", sample_df, figsize=bad)
+
+
+def test_invalid_figsize_is_checked_before_data(sample_df):
+    """figsize の間違いは、データの検査より先に知らせる"""
+    with pytest.raises(ValueError, match="0より大きい"):
+        bar_plot("存在しない列", sample_df, figsize=(0, 5))
+
+
+def test_cm_error_explains_conversion(sample_df):
+    with pytest.raises(ValueError) as exc:
+        box_plot("全国成長効果", sample_df, figsize=(20, 12, "cm"))
+    assert "2.54" in str(exc.value)
+
+
+@pytest.mark.parametrize("n_rows, height", [(3, 3.0), (17, 6.1), (47, 15.1)])
+def test_bar_plot_height_follows_number_of_rows(n_rows, height):
+    df = pd.DataFrame({"名": [f"地域{i:02d}" for i in range(n_rows)],
+                       "値": np.arange(n_rows) + 1.0})
+    bar_plot("値", df, label_col="名", unit=1)
+    assert _size() == (9.0, height)
+
+
+def test_bar_plot_47_rows_labels_do_not_overlap():
+    df = pd.DataFrame({"名": [f"都道府県{i:02d}" for i in range(47)],
+                       "値": np.arange(47) + 1.0})
+    bar_plot("値", df, label_col="名", unit=1)
+    fig = matplotlib.pyplot.gcf()
+    fig.canvas.draw()
+    r = fig.canvas.get_renderer()
+    boxes = [t.get_window_extent(r) for t in fig.axes[0].get_yticklabels()]
+    overlaps = sum(1 for i in range(len(boxes)) for j in range(i + 1, len(boxes))
+                   if boxes[i].overlaps(boxes[j]))
+    matplotlib.pyplot.close("all")
+    assert overlaps == 0
+
+
+def test_bar_plot_figsize_overrides_auto_height():
+    df = pd.DataFrame({"名": [f"地域{i:02d}" for i in range(47)],
+                       "値": np.arange(47) + 1.0})
+    bar_plot("値", df, label_col="名", unit=1, figsize=(9, 12))
+    assert _size() == (9.0, 12.0)
+
+
+def test_box_plot_uses_tight_layout(sample_df):
+    """box_plot も他の関数と同じく余白を詰める"""
+    box_plot("全国成長効果", sample_df)
+    ax = matplotlib.pyplot.gcf().axes[0]
+    width = ax.get_position().width
+    matplotlib.pyplot.close("all")
+    assert width > 0.85

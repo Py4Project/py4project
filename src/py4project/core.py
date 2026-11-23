@@ -169,6 +169,77 @@ def _resolve_legend(columns, legend, func_name, arg_name):
     return legend
 
 
+_FIGSIZE_HINT = ('figsize=(8, 5) のように、(幅, 高さ) をインチで指定してください。'
+                 '（1インチ＝2.54cm）')
+
+
+def _check_figsize(figsize):
+    """figsize が (幅, 高さ) の正しい形かを確認する（内部用）
+
+    matplotlib にそのまま渡すと、間違いが英語のエラーになったり、
+    (0, 5) のように描く時点まで気づかれなかったりするため、先に確かめる。"""
+    if figsize is None:
+        return
+
+    if isinstance(figsize, str) or not isinstance(figsize, (tuple, list, np.ndarray)):
+        raise TypeError(_err(
+            'figsize の指定のしかたが正しくありません。',
+            f'figsize に {figsize!r} が指定されました。'
+            '図の大きさは (幅, 高さ) の2つの数で表します。',
+            _FIGSIZE_HINT))
+
+    values = list(figsize)
+
+    if len(values) == 3 and isinstance(values[2], str):
+        raise ValueError(_err(
+            'figsize に単位は指定できません。',
+            f'figsize に {tuple(values)!r} が指定されました。'
+            'py4project では図の大きさをインチで指定します。'
+            '（単位の指定は matplotlib のバージョンによって'
+            '使えたり使えなかったりするため、受け付けていません）',
+            'cm で考えたいときは 2.54 で割ってインチにしてください。'
+            '　例： 幅20cm・高さ12cm → figsize=(20/2.54, 12/2.54)'))
+
+    if len(values) != 2:
+        raise ValueError(_err(
+            'figsize には2つの数を指定してください。',
+            f'figsize に{len(values)}個の値が指定されました。',
+            _FIGSIZE_HINT))
+
+    for v in values:
+        if isinstance(v, (bool, np.bool_)) or not isinstance(
+                v, (int, float, np.integer, np.floating)):
+            raise TypeError(_err(
+                'figsize には数を指定してください。',
+                f'figsize に {v!r} が含まれています。'
+                '文字列（例："8"）ではなく、数（例：8）で書きます。',
+                _FIGSIZE_HINT))
+
+    if not all(np.isfinite(v) and v > 0 for v in values):
+        raise ValueError(_err(
+            'figsize には0より大きい数を指定してください。',
+            f'figsize に {tuple(values)!r} が指定されました。'
+            '幅や高さが0以下だと図を描けません。',
+            _FIGSIZE_HINT))
+
+
+def _new_figure(figsize, default=None):
+    """図をつくる（内部用）
+
+    figsize が省略されたときは default を使う。
+    default も None なら matplotlib の標準の大きさになる。"""
+    size = default if figsize is None else tuple(float(v) for v in figsize)
+    return plt.subplots(figsize=size)
+
+
+def _bar_figsize(n_rows):
+    """bar_plot の標準の大きさ（内部用）
+
+    1本あたり0.3インチに余白1インチを足した高さにする。
+    17行で約6インチ（0.3.1までの固定値とほぼ同じ）、47行で約15インチになる。"""
+    return (9.0, max(3.0, 0.3 * n_rows + 1.0))
+
+
 def _label(value):
     """マーカー横に表示する文字列を安全に作る（内部用）
 
@@ -410,7 +481,8 @@ def regression(x, y, data, robust=False, alpha=0.05, stars=True):
 
 
 def regression_plot(x=None, y=None, data=None, title=None, xlabel=None, ylabel=None,
-                    line=True, label_col=None, robust=False, *, ols_res=None):
+                    line=True, label_col=None, robust=False, *, ols_res=None,
+                    figsize=None):
     """散布図に回帰直線を重ねて表示する。
 
     引数
@@ -445,6 +517,12 @@ def regression_plot(x=None, y=None, data=None, title=None, xlabel=None, ylabel=N
         図を描きます。この場合 x、y、data の指定は不要です。
         label_col と robust は一緒に使えません。
         robust を変えたい場合は regression の側で指定してください。
+    figsize : (幅, 高さ)（キーワード指定のみ）
+        図の大きさをインチで指定します（1インチ＝2.54cm）。
+        例： figsize=(8, 5)
+        省略すると matplotlib の標準の大きさ（通常は (6.4, 4.8)）になります。
+        図を小さくしても文字や点の大きさは変わらないため、
+        名前を表示していると重なりやすくなります。
 
     使用例
     ------
@@ -460,6 +538,7 @@ def regression_plot(x=None, y=None, data=None, title=None, xlabel=None, ylabel=N
 
     欠損値のある行を除いた結果、データが3行に満たない場合はエラーになります。
     """
+    _check_figsize(figsize)
     if ols_res is not None:
         # ---- regression の結果をそのまま使う ----
         # 使えない組み合わせを先に弾く
@@ -537,7 +616,7 @@ def regression_plot(x=None, y=None, data=None, title=None, xlabel=None, ylabel=N
     if ylabel is None:
         ylabel = y_name
 
-    fig, ax = plt.subplots()
+    fig, ax = _new_figure(figsize)
     ax.scatter(_x, _y, s=60, color='steelblue', zorder=3)
 
     if label_col is not None and plot_data is not None:
@@ -576,7 +655,7 @@ def regression_plot(x=None, y=None, data=None, title=None, xlabel=None, ylabel=N
 
 def scatter_plot(x, y, data, title=None, xlabel=None, ylabel=None,
                  line=True, label_col=None,
-                 xlog=False, ylog=False, xylog=False):
+                 xlog=False, ylog=False, xylog=False, *, figsize=None):
     """散布図にトレンド線を重ねて表示する。
 
     regression_plotとよく似ていますが、こちらは推定式を表示せず、
@@ -611,6 +690,12 @@ def scatter_plot(x, y, data, title=None, xlabel=None, ylabel=None,
         Trueで縦軸の変数を常用対数（log10）に変換します。
     xylog : True または False
         Trueで横軸と縦軸の両方を常用対数に変換します。
+    figsize : (幅, 高さ)（キーワード指定のみ）
+        図の大きさをインチで指定します（1インチ＝2.54cm）。
+        例： figsize=(8, 5)
+        省略すると matplotlib の標準の大きさ（通常は (6.4, 4.8)）になります。
+        図を小さくしても文字や点の大きさは変わらないため、
+        名前を表示していると重なりやすくなります。
 
     使用例
     ------
@@ -624,6 +709,7 @@ def scatter_plot(x, y, data, title=None, xlabel=None, ylabel=None,
     トレンド線を引く場合（line=True）、欠損値を除いたあとのデータが
     3行に満たないとエラーになります。
     """
+    _check_figsize(figsize)
     _check_dataframe(data, example='scatter_plot("事業所数", "従業者数", df)')
     _check_x_not_y([x], y)
     _check_column(data, x, 'x')
@@ -663,7 +749,7 @@ def scatter_plot(x, y, data, title=None, xlabel=None, ylabel=None,
     _x = data[x_plot]
     _y = data[y_plot]
 
-    fig, ax = plt.subplots()
+    fig, ax = _new_figure(figsize)
     ax.scatter(_x, _y, s=60, color='steelblue', zorder=3)
 
     if label_col is not None:
@@ -706,7 +792,8 @@ _COLOR_MAP = {
 
 
 def bar_plot(x, data, title=None, xlabel=None, unit=1000,
-             sort_by=None, label_col=None, ascending=None, legend=None):
+             sort_by=None, label_col=None, ascending=None, legend=None,
+             *, figsize=None):
     """横向きの棒グラフを表示する。
 
     産業ごとの値を横に並べた棒グラフを描きます。
@@ -747,6 +834,11 @@ def bar_plot(x, data, title=None, xlabel=None, unit=1000,
         凡例に表示する名前。xと同じ順番、同じ数で指定します。
         省略すると列名がそのまま使われます。
         例： x=['w2016', 'w2021'] に対して legend=['2016年', '2021年']
+    figsize : (幅, 高さ)（キーワード指定のみ）
+        図の大きさをインチで指定します（1インチ＝2.54cm）。
+        例： figsize=(9, 12)
+        省略すると幅は9インチ、高さは棒の数に合わせて自動で決まります
+        （17産業なら約6インチ、47都道府県なら約15インチ）。
 
     使用例
     ------
@@ -758,6 +850,7 @@ def bar_plot(x, data, title=None, xlabel=None, unit=1000,
     >>> bar_plot(['w2016', 'w2021'], df, label_col='産業',
     ...          legend=['2016年', '2021年'])
     """
+    _check_figsize(figsize)
     _check_dataframe(data, example='bar_plot("従業者数", df)')
 
     if isinstance(x, pd.DataFrame):
@@ -812,7 +905,8 @@ def bar_plot(x, data, title=None, xlabel=None, unit=1000,
         data = data.sort_values(sort_by,
                                 ascending=False if ascending is None else ascending)
 
-    fig, ax = plt.subplots(figsize=(9, 6))
+    # 高さは棒の数に合わせる。固定にすると47都道府県で名前が重なる。
+    fig, ax = _new_figure(figsize, default=_bar_figsize(len(data)))
 
     n = len(x_list)
     y = np.arange(len(data))
@@ -844,7 +938,8 @@ def bar_plot(x, data, title=None, xlabel=None, unit=1000,
     plt.show()
 
 
-def box_plot(x, data, title=None, label_col=None, xlabel=None, xlog=False):
+def box_plot(x, data, title=None, label_col=None, xlabel=None, xlog=False,
+             *, figsize=None):
     """箱ひげ図を表示する。
 
     データの散らばり方（中央値・四分位数・外れ値）を確認するための図です。
@@ -873,6 +968,12 @@ def box_plot(x, data, title=None, label_col=None, xlabel=None, xlog=False):
         省略するとxの列名がそのまま使われます。
     xlog : True または False
         Trueでデータを常用対数（log10）に変換してから箱ひげ図を描きます。
+    figsize : (幅, 高さ)（キーワード指定のみ）
+        図の大きさをインチで指定します（1インチ＝2.54cm）。
+        例： figsize=(8, 5)
+        省略すると matplotlib の標準の大きさ（通常は (6.4, 4.8)）になります。
+        図を小さくしても文字や点の大きさは変わらないため、
+        名前を表示していると重なりやすくなります。
 
     使用例
     ------
@@ -886,6 +987,7 @@ def box_plot(x, data, title=None, label_col=None, xlabel=None, xlog=False):
     xlog=True にする場合、対象の列に0以下の値が含まれているとエラーになります。
     box_plot に ylog や xylog はありません。
     """
+    _check_figsize(figsize)
     _check_dataframe(data, example='box_plot("従業者数", df)')
 
     if isinstance(x, pd.DataFrame):
@@ -926,7 +1028,7 @@ def box_plot(x, data, title=None, label_col=None, xlabel=None, xlog=False):
 
     data = data.copy()
 
-    fig, ax = plt.subplots()
+    fig, ax = _new_figure(figsize)
 
     if xlog:
         x_log = [s + '_log' for s in x]
@@ -960,11 +1062,12 @@ def box_plot(x, data, title=None, label_col=None, xlabel=None, xlog=False):
 
     if title:
         ax.set_title(title)
+    plt.tight_layout()
     plt.show()
 
 
 def line_plot(x, y, data, title=None, xlabel=None, ylabel=None, legend=None,
-              xlog=False, ylog=False, xylog=False):
+              xlog=False, ylog=False, xylog=False, *, figsize=None):
     """折れ線グラフを表示する。
 
     年や四半期のように順序のある変数を横軸にとり、値の推移を線で結びます。
@@ -1005,6 +1108,12 @@ def line_plot(x, y, data, title=None, xlabel=None, ylabel=None, legend=None,
         Trueで縦軸の変数を常用対数（log10）に変換します。
     xylog : True または False
         Trueで横軸と縦軸の両方を常用対数に変換します。
+    figsize : (幅, 高さ)（キーワード指定のみ）
+        図の大きさをインチで指定します（1インチ＝2.54cm）。
+        例： figsize=(8, 5)
+        省略すると matplotlib の標準の大きさ（通常は (6.4, 4.8)）になります。
+        図を小さくしても文字や点の大きさは変わらないため、
+        名前を表示していると重なりやすくなります。
 
     使用例
     ------
@@ -1017,6 +1126,7 @@ def line_plot(x, y, data, title=None, xlabel=None, ylabel=None, legend=None,
     対数をとる列に0以下の値が含まれているとエラーになります。
     横軸を対数にする場合、xは数値の列である必要があります。
     """
+    _check_figsize(figsize)
     _check_dataframe(data, example='line_plot("年", "従業者数", df)')
 
     if isinstance(y, str):
@@ -1067,7 +1177,7 @@ def line_plot(x, y, data, title=None, xlabel=None, ylabel=None, legend=None,
         else:
             y_plot.append(col)
 
-    fig, ax = plt.subplots()
+    fig, ax = _new_figure(figsize)
 
     n = len(y)
     for i, (col, name) in enumerate(zip(y_plot, names)):
@@ -1093,7 +1203,7 @@ def line_plot(x, y, data, title=None, xlabel=None, ylabel=None, legend=None,
 
 
 def pie_plot(x, data, label_col, title=None, legend=False,
-             other=None, other_label='その他', top=None):
+             other=None, other_label='その他', top=None, *, figsize=None):
     """円グラフを表示する。
 
     全体に占める割合を扇形の大きさで表します。
@@ -1130,6 +1240,12 @@ def pie_plot(x, data, label_col, title=None, legend=False,
         例： top=5 なら、上位5項目とその他が表示されます。
         残した項目は値の大きい順に並びます。
         other と同時には使えません。
+    figsize : (幅, 高さ)（キーワード指定のみ）
+        図の大きさをインチで指定します（1インチ＝2.54cm）。
+        例： figsize=(8, 5)
+        省略すると matplotlib の標準の大きさ（通常は (6.4, 4.8)）になります。
+        legend=True のときに図の幅を小さくすると、凡例に場所をとられて
+        円が小さくなります。
 
     使用例
     ------
@@ -1147,6 +1263,7 @@ def pie_plot(x, data, label_col, title=None, legend=False,
     項目が多いと名前が重なって読みにくくなります。
     目安として7項目程度までにするか、top や other でまとめてください。
     """
+    _check_figsize(figsize)
     _check_dataframe(data, example='pie_plot("従業者数", df, "産業")')
     _check_column(data, x, 'x')
     _check_column(data, label_col, 'label_col')
@@ -1251,7 +1368,7 @@ def pie_plot(x, data, label_col, title=None, legend=False,
     if to_merge:
         colors[-1] = '#9E9E9E'
 
-    fig, ax = plt.subplots()
+    fig, ax = _new_figure(figsize)
 
     if legend:
         # 凡例を出すときは、扇形の横の名前を省いて重複を避ける
